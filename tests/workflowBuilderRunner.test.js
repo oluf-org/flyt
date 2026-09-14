@@ -62,7 +62,8 @@ test('the Workflow picker exposes launchable stacks and their named modes', asyn
     text: 'done', finishReason: 'stop', provider: 'script', model: request.model,
   }));
   const workflows = await api.invoke('workflow:list');
-  assert.deepEqual(workflows.map(item => item.id).sort(), ['fable-at-home', 'learn-from-repo', 'pipeline', 'research', 'spec-an-idea']);
+  assert.deepEqual(workflows.map(item => item.id).sort(), ['deliver-complex-task', 'fable-at-home', 'fix-bug', 'learn-from-repo', 'make-change', 'pipeline', 'plan-idea', 'research', 'research-question', 'review-change', 'spec-an-idea']);
+  assert.equal(workflows[0].id, 'make-change');
   assert.deepEqual(workflows.find(item => item.id === 'pipeline').presets.map(item => item.id), [
     'low', 'medium', 'high',
   ]);
@@ -639,4 +640,31 @@ test('a generated worker asks for approval under the run the person launched', a
   assert.equal(snapshot.meta.stage, 'done', snapshot.meta.error);
   assert.equal(fs.existsSync(path.join(workspace, 'made.txt')), false);
   assert.equal((await api.invoke('workflow:pending', { projectId, runId: started.runId })).length, 0);
+});
+
+test('generated worker file changes are exposed by the parent run API', async () => {
+  let wrote = false;
+  const plan = JSON.stringify({ summary: 'Create one file.', tasks: [
+    { id: 'write', title: 'Write', goal: 'Create made.txt.', dependsOn: [], produces: [], requires: [], optional: [], writeFiles: ['made.txt'] },
+  ] });
+  const { api, projectId } = await workflowHarness(async request => {
+    if (JSON.stringify(request.messages).includes('ROLE: task-graph-planner')) return { text: plan, finishReason: 'stop', provider: 'script', model: request.model };
+    const offered = (request.tools ?? []).map(tool => tool?.function?.name ?? tool?.name);
+    if (offered.includes('create_file') && !wrote) {
+      wrote = true;
+      return { text: 'Creating the file.', finishReason: 'tool_calls', provider: 'script', model: request.model,
+        message: { tool_calls: [{ id: 'tracked-write', function: { name: 'create_file', arguments: JSON.stringify({ path: 'made.txt', content: 'made\n' }) } }] } };
+    }
+    return { text: 'Completed.', finishReason: 'stop', provider: 'script', model: request.model };
+  });
+  const { runId } = await api.invoke('workflow:run', { projectId, workflowId: 'fable-at-home', input: 'Create made.txt.', presetId: 'low', approvalMode: 'always' });
+  const changes = await waitForAsync(async () => {
+    const report = await api.invoke('run:changes', { projectId, runId });
+    return report.files.some(file => file.path === 'made.txt') ? report : null;
+  }, 'parent file-change report');
+  const file = changes.files.find(file => file.path === 'made.txt');
+  assert.equal(file.status, 'created');
+  assert.equal(file.added, 1);
+  assert.equal(file.deleted, 0);
+  assert.deepEqual(file.tools, ['create_file']);
 });

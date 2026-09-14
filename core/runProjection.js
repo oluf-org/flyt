@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import * as canonicalKernel from '#kernel';
 const { readSessionLogFile } = canonicalKernel;
 import { fileFingerprint } from './fileFingerprint.js';
+import { deterministicRunCapsule, deterministicSummary } from './runCapsule.js';
 
 // Local filesystems can assign the same ctime to multiple writes in one clock
 // tick. Verify bytes until a cached generation has survived a conservative
@@ -99,11 +100,18 @@ function projectRunSnapshot(kernel, events, id, runsRoot, { materialise = true, 
   const retrospectives = Object.fromEntries(Object.keys(projected.meta.blockStatus).map(blockId => [blockId, {
     status: projected.meta.blockStatus[blockId], toolCalls, usage,
   }]));
-  const conversation = relevant.flatMap(event => {
+  // Keep prior recaps as history, but never present a previous attempt's result
+  // as the current one while a retry runs or awaits its new terminal recap.
+  const attemptStart = relevant.findLastIndex(event => event.type === 'run.stage'
+    && ['execution', 'resumed'].includes(event.data?.stage));
+  const conversation = relevant.flatMap((event, index) => {
     if (event.type === 'message.user') return [{ role: 'user', text: String(event.data?.content ?? ''), attachments: event.data?.attachments ?? [], parts: event.data?.parts, at: event.at }];
     if (event.type === 'supervisor.summary') return [{
-      role: 'assistant', text: String(event.data?.content ?? ''), at: event.at,
+      role: 'assistant', text: event.data?.degraded && event.data?.capsule && index >= attemptStart
+        ? deterministicSummary(deterministicRunCapsule({ meta: projected.meta, nodeOutputs: projected.blocks, stack: projected.stack }, { workflowName: event.data.capsule.workflow }))
+        : String(event.data?.content ?? ''), at: event.at,
       supervisor: true, degraded: Boolean(event.data?.degraded), reason: event.data?.reason ?? null,
+      superseded: index < attemptStart,
     }];
     return [];
   });
@@ -194,7 +202,7 @@ export class StoredStackSnapshotReader {
       const key = JSON.stringify([String(d.parentId), String(d.taskId)]);
       if (!d.parentId || !d.taskId || !d.blockId || state.generated.has(key)) return;
       state.generated.add(key);
-    } else if (!['tool.result', 'message.user', 'supervisor.summary'].includes(event.type)) return;
+    } else if (!['tool.result', 'message.user', 'supervisor.summary', 'run.stage'].includes(event.type)) return;
     state.displayEvents.push(compact);
   }
 

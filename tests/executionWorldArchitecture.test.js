@@ -9,6 +9,8 @@ const slash = value => path.relative(root, value).split(path.sep).join('/');
 const allow = new Set([
   'core/adapters/cliDelegate.js',
   'core/effect.js',
+  'core/repoChanges.js', // fixed read-only Git inventory/diff, scrubbed environment
+  'core/workflowSupport.js', // pinned read-only Git comparison; commands still use tools
   'core/homeSeed.js',
   'core/python.js',
   'core/stackRunner.js',

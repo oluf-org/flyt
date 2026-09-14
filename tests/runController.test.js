@@ -8,7 +8,7 @@ const deferredRun = runId => {
   return { runId, settled: () => done, finish };
 };
 
-function harness() {
+function harness(options = {}) {
   const runs = new Map();
   const leases = new Map();
   const boots = [];
@@ -49,6 +49,7 @@ function harness() {
     snapshotLive: async () => ({}),
     snapshotStored: async () => ({}),
     metadataStored: () => null,
+    ...options,
   });
   const launch = (runId, overrides = {}) => controller.start({
     projectId: 'project-a', runId, stackId: 'research', input: 'question',
@@ -119,6 +120,25 @@ test('shutdown stops and awaits every owned run before returning', async () => {
   assert.equal(boots[0].state.disposed, 1);
   assert.equal(leases.size, 0);
   assert.deepEqual(controller.list(), []);
+});
+
+for (const action of ['resume', 'restartBlock']) test(`${action} refreshes the terminal recap after settlement`, async () => {
+  const run = deferredRun('recovered');
+  const { controller, boots } = harness({
+    metadataStored: () => ({ workspace: '/workspace', profile: 'flyt-desktop' }),
+    resumeRun: async () => ({ run }),
+    restartBlock: async () => ({ run }),
+  });
+  const recaps = [];
+  await controller[action]({ projectId: 'project-a', runId: run.runId, blockId: 'delivery',
+    afterSettled: async (outcome, record) => recaps.push([outcome.state, record.runId, record.host]),
+  });
+  const owned = controller.get('project-a', run.runId);
+  assert.equal(recaps.length, 0);
+  run.finish({ state: 'done' });
+  await owned.settlement;
+  assert.deepEqual(recaps, [['done', run.runId, boots[0].host]]);
+  assert.equal(boots[0].state.disposed, 1);
 });
 
 

@@ -93,6 +93,8 @@ export interface BlockRun {
   ceiling: readonly string[];
   /** Cancellation. A block that ignores it stops at its next durable boundary anyway. */
   signal?: AbortSignal;
+  /** Cooperate with a requested pause at a durable internal boundary. True if held. */
+  checkpoint?: () => Promise<boolean>;
 }
 
 /** What one execution of a block produced. */

@@ -195,6 +195,9 @@ internal static class Program
         // revocable per-call temp capability. Replacing the DACL breaks runtime
         // initialization, while adding the standing workspace SID would let
         // unrelated calls in the same workspace open one another's objects.
+        // CreateNamedPipe with no explicit descriptor uses a separate Windows
+        // template, NOT this token DACL. Do not add the user's SID as a
+        // restricting SID to fix libuv pipes: that defeats filesystem denial.
         GetTokenInformation(token, 6, IntPtr.Zero, 0, out var infoBytes);
         if (infoBytes == 0) ThrowWin32("GetTokenInformation(TokenDefaultDacl size)");
         var info = Marshal.AllocHGlobal((int)infoBytes);
@@ -245,7 +248,17 @@ internal static class Program
         // the confined grandchild, then restore the original safe state.
         foreach (var handle in stdHandles)
             if (!SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) ThrowWin32("SetHandleInformation(enable inherit)");
-        var commandLine = string.Join(" ", argv.Select(Quote));
+        // cmd /s /c consumes shell text, not a CRT argv element. The host has
+        // already supplied its outer quotes; escaping them as \" changes the
+        // command itself (even `echo hello` becomes an invalid program name).
+        var shellEnvelope = argv.Length == 5
+            && string.Equals(Path.GetFileName(argv[0]), "cmd.exe", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(argv[1], "/d", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(argv[2], "/s", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(argv[3], "/c", StringComparison.OrdinalIgnoreCase);
+        var commandLine = shellEnvelope
+            ? $"{Quote(argv[0])} /d /s /c {argv[4]}"
+            : string.Join(" ", argv.Select(Quote));
         PROCESS_INFORMATION process;
         int createError = 0;
         bool created;

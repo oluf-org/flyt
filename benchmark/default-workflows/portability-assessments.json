@@ -1,0 +1,146 @@
+{
+  "2026-09-13-portable-validation-citation-retry/py-complex-validation": {
+    "accepted": true,
+    "reason": "GUI Retry completed both milestones and final integration; the exact 39-test gate and frozen independent holdout pass. Inspected validation, creation, duplicate rejection, non-mutation, unchanged APIs and the five added public-API regression tests. The completed screen exposed an old error in its deterministic recap; after the projection fix, read-only GUI reinspection in portable-validation-final-inspect confirms the current root result with no obsolete Run error. This task is counted once across its retained-workspace execution and retries."
+  },
+  "2026-09-13-portable-complex-search/py-complex-search": {
+    "accepted": true,
+    "reason": "Fresh GUI implementation completed two dependent milestones and final integration. Gate receipts pass 10 tests at milestone 1 and 19 at milestone 2/final; frozen holdout passes. Inspected Unicode casefold, all-term matching across title/tags, empty query, original object identity/order, no mutation, exact status filtering, summary over returned tickets and preserved get_tickets semantics. README and storage-to-report regression tests provide integration coverage; GUI final output inspected."
+  },
+  "2026-09-13-portable-validation-format-retry/py-complex-validation": {
+    "accepted": false,
+    "reason": "Retry reused and successfully formatted the saved review, then performed the bounded correction for malformed criterion labels. That correction's formatter had roughly 81 seconds without a new chunk before reaching the two-minute cap. GUI Failed; 39-test and independent artifact checks remain passing but do not establish workflow completion."
+  },
+  "2026-09-13-portable-validation-nested-retry/py-complex-validation": {
+    "accepted": false,
+    "reason": "Nested Retry reused the completed evidence-correction result without repeating either review, but its formatted citation assigned a verbatim quote to line 14 instead of its actual unique line 13. Runtime rejection preserved correctness. A deterministic unique-quote locator was subsequently added; no invented or ambiguous quotations are accepted."
+  },
+  "2026-09-13-portable-settings-plan/plan-portable-settings": {
+    "accepted": true,
+    "reason": "Read the complete final specification and GUI Done output. Environment/file/default precedence, file-error precedence, strict decimal parsing and 1..1000 bounds, exact currency values, unchanged PORT expression, no writes, host-supplied paths and portable injected-error tests agree. The parser typo in the separate assumptions field was repaired. Async migration is a stated assumption with no in-repo callers; implementation and OS test execution are explicitly unverified. Source files unchanged."
+  },
+  "2026-09-13-portable-backup-io-review/plan-backup-portable": {
+    "accepted": false,
+    "reason": "Supervisor stopped through the GUI at 744 seconds. Independent inspection found restore skips the required raw-byte snapshot for corrupt current data; backup-directory initialization and bounded failed-prune iteration are insufficiently specified. The runtime review concentrated on secondary issues and did not catch the mandatory contradiction. Retained as evidence of a remaining planning reliability limitation."
+  },
+  "2026-09-13-portable-validation-evidence/py-complex-validation": {
+    "accepted": false,
+    "reason": "Retry corrected the pre-existing-work claim using read-only evidence and accepted milestone 1. Milestone 2 added five public-API regression tests and passed the 39-test gate plus README checks, but its review omitted criterion booleans and the format-only provider call stalled until the two-minute limit. No full acceptance. A later retry can reuse the completed unvalidated review rather than repeat inspection."
+  },
+  "2026-09-13-portable-backup-bounded/plan-backup-portable": {
+    "accepted": false,
+    "reason": "GUI Done after 441 seconds, but the full specification fails independent semantic inspection: it promises unchanged data on failure even after replacement followed by directory-sync failure; first-use directory creation and required return fields are omitted. Retained as a false success. Rerun with explicit commit-point, initialization and complete-return review guidance."
+  },
+  "2026-09-13-portable-validation-recheck/py-complex-validation": {
+    "accepted": false,
+    "reason": "Fresh GUI execution on retained code ran the 34-test gate and README example, but its worker classified pre-existing Git changes as implementation by this execution. The empty host-observed change correctly failed acceptance. A reader-only completion-evidence correction was added and visible Retry continues the same budget."
+  },
+  "2026-09-13-portable-backup-concise/plan-backup": {
+    "accepted": false,
+    "reason": "Time budget expired during the second consistency review. The draft retained contradictions about snapshot counts after failed writes; permission-test and power-loss assumptions also require platform-specific treatment. A separate portable-backup scenario explicitly freezes those requirements; this attempt is not relabeled as accepted."
+  },
+  "2026-09-13-portable-pause-final/py-complex-report": {
+    "accepted": true,
+    "reason": "Fresh live GUI delivery completed both milestones and final integration. Required gate and frozen holdout pass; inspected UTC bounds, validation, service delegation and exact CRLF export. A real pause held source unchanged and Resume completed with each writing stage started once. Earlier milestone receipts existed in the canonical log but were omitted from this older build's integration-review input; that visibility gap was fixed separately and tested. This is the same reporting task, counted once."
+  },
+  "2026-09-13-portable-export-concise/plan-export": {
+    "accepted": true,
+    "reason": "Independently read the complete final specification and source citations. Paid-only count and cents arithmetic, four-column CSV examples including zero row, NOK formatting, half-open UTC boundaries and corrected setUTCFullYear handling for years 1..99 agree. CLI/defaults are labeled assumptions; no implementation or test execution claimed. GUI Done after a bounded consistency repair; source files unchanged."
+  },
+  "2026-09-13-portable-cache-rerun/py-bug-cache": {
+    "accepted": true,
+    "reason": "Recorded pre-fix failure and post-fix gate pass; inspected task-state caching, original exception identity and single-flight race regression. Frozen holdout passes. GUI Done and actual output inspected."
+  },
+  "2026-09-13-portable-report-resume/py-complex-report": {
+    "accepted": true,
+    "reason": "Both dependent milestones and final integration accepted; frozen holdout and declared unittest gate pass. Inspected UTC month boundaries, validation, exact CRLF export and preserved service API. GUI readback in portable-report-inspect confirms authoritative Done without the obsolete recap after the projection fix. The earlier pause request did not hold; that separate recovery defect is not credited as a successful pause test."
+  },
+  "2026-09-13-portable-migration-resume/py-complex-migration": {
+    "accepted": true,
+    "reason": "Both dependent milestones and final integration accepted after GUI Retry; first accepted milestone retained. Inspected fresh envelope, legacy/v2 loading, validation before writes, newline, error propagation and unchanged APIs; frozen holdout and unittest gate pass. GUI readback in portable-migration-inspect confirms Done without the obsolete failure recap. Float version 2.0 is outside the frozen rejection requirements."
+  },
+  "2026-09-13-portable-python-changes/py-change-pagination": {
+    "accepted": true,
+    "reason": "Stable filter-before-page implementation, validation and immutable inputs checked in source; frozen holdout and declared unittest gate pass; GUI Done."
+  },
+  "2026-09-13-portable-python-changes/py-change-settings": {
+    "accepted": true,
+    "reason": "Defaults, trimming, range/type failures with field names and fresh nonmutating result checked; frozen holdout and declared gate pass; GUI Done."
+  },
+  "2026-09-13-portable-python-rerun/py-change-csv": {
+    "accepted": true,
+    "reason": "CSV reader round-trip, exact headers and CRLF, formula prefixes, empty input and immutability checked independently; implementation uses csv.writer; GUI Done and gate pass."
+  },
+  "2026-09-13-portable-python-rerun/py-bug-median": {
+    "accepted": true,
+    "reason": "Actual failing command precedes repair; sorted-copy arithmetic median preserves odd/empty behavior and input order; independent holdout and gate pass; GUI Done."
+  },
+  "2026-09-13-portable-date-rerun/py-bug-date": {
+    "accepted": true,
+    "reason": "Actual red/green reproduction, half-open next-month UTC boundary, December/leap cases and original order inspected; independent holdout and gate pass; GUI Done."
+  },
+  "2026-09-13-portable-readonly-rerun/review-revenue": {
+    "accepted": true,
+    "reason": "Identifies the introduced paid-only revenue regression with correct trigger and amounts; test weakness is a caveat rather than an additional defect; files unchanged and test execution explicitly unverified."
+  },
+  "2026-09-13-portable-readonly-rerun/review-clean": {
+    "accepted": true,
+    "reason": "No actionable findings for the correct ENOENT-only fallback; optional coverage caveat stays outside findings; actual execution is not claimed; files unchanged."
+  },
+  "2026-09-13-portable-readonly-rerun/review-contract": {
+    "accepted": true,
+    "reason": "Correctly traces the incompatible return envelope to handleRequest and the existing failing assertion; no invented implementation work; files unchanged."
+  },
+  "2026-09-13-portable-reviews/review-contract": {
+    "accepted": true,
+    "reason": "Correctly identifies the wrapper contract regression and concrete broken assertion; read-only. Superseded by a later accepted run of the same task and counted only once."
+  },
+  "2026-09-13-portable-reviews/review-revenue": {
+    "accepted": false,
+    "reason": "Primary revenue finding is correct, but the report also promotes an unchanged test-coverage gap into a defect finding. Rerun with the corrected review contract."
+  },
+  "2026-09-13-portable-reviews/review-clean": {
+    "accepted": false,
+    "reason": "Adds an optional hypothetical test finding to a clean change. Rerun with the corrected review contract."
+  },
+  "2026-09-13-portable-research/research-architecture": {
+    "accepted": true,
+    "reason": "Grounded architecture and extension analysis matches the opened code and its limits; no execution or implementation claim; files unchanged."
+  },
+  "2026-09-13-portable-research/research-conflict": {
+    "accepted": true,
+    "reason": "Distinguishes current offline product decisions from the rejected legacy proposal, with validated quotations and bounded uncertainty; files unchanged."
+  },
+  "2026-09-13-portable-research/research-readiness": {
+    "accepted": false,
+    "reason": "Main concurrency risks are correct, but the proposed lost-update assertion watches the wrong writer after the stated interleaving. Rerun with experiment-tracing guidance."
+  },
+  "2026-09-13-portable-readonly-rerun/research-readiness": {
+    "accepted": false,
+    "reason": "GUI Done but source correction replaced the useful answer with the literal string null. Preserved as a false success; explicit answer-preservation contract added and rerun."
+  },
+  "2026-09-13-portable-final-readonly/research-readiness": {
+    "accepted": true,
+    "reason": "Useful answer survives focused citation repair. Explains overwrite and torn-read risks as inference, no deployed incidents or executed experiments claimed; proposed interleaving probe checks lost tags and parse errors; files unchanged. The proposed stress probe is nondeterministic and has not been run."
+  },
+  "2026-09-13-portable-plans-rerun/plan-export": {
+    "accepted": false,
+    "reason": "CSV columns now align, but the declared year range 1..9999 conflicts with Date.UTC's remapping of years 1..99 to 1901..1999; exact-return examples also omit declared fields. The conservative draft label does not make these contradictions accepted. Rerun after broader boundary/interface review guidance."
+  },
+  "2026-09-13-portable-plans-rerun/plan-ambiguous": {
+    "accepted": true,
+    "reason": "GUI clarification records local manual follow-up, paid timestamp plus seven days, staff marking done and visible missing-date issues. Specification preserves these decisions, defines immutable functions, storage and acceptance, and passes independent consistency review without claiming implementation. Files unchanged."
+  },
+  "2026-09-13-portable-backup-platforms/plan-backup-portable": {
+    "accepted": false,
+    "reason": "Elapsed planning budget expired during the second independent review. The retained draft omitted first-use backup directory creation and contradicted its mandatory pre-overwrite snapshot rule in restore. No completed or accepted specification is claimed. The same frozen request was rerun with bounded review output."
+  },
+  "2026-09-13-portable-validation-final/py-complex-validation": {
+    "accepted": false,
+    "reason": "Stopped through the GUI after the format-only provider response ignored forced submission and repeated end markers. Code and independent artifact checks are retained, but milestone 2 and integration had not completed."
+  },
+  "2026-09-13-portable-validation-resume/py-complex-validation": {
+    "accepted": false,
+    "reason": "GUI Retry retained milestone 1, accepted milestone 2 and ran the final 34-test gate. Integration failed because the review returned pass with no findings and positive evidence but all eight criterion booleans false. No success is credited. A bounded reader correction was added. A distinct fresh GUI execution then rechecked the retained source; this was an avoidable diagnostic rerun, since the actual 120-minute runtime budget had not expired."
+  }
+}

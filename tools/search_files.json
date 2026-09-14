@@ -1,7 +1,7 @@
 {
   "id": "search_files",
   "title": "Search the project",
-  "description": "Search the text of files in the workspace (the bound project) for a regular expression, and get back file paths with line numbers and the matching lines. This is how you LOCATE code: search first for the symbol, string or call you need, then read_file that path around the line it names. Reading a large file in windows to find one function wastes the budget you need for the edit. This searches THIS project only — use search_references for the read-only reference library, and glob when you want file names rather than contents.",
+  "description": "Search the text of files in the workspace (the bound project) for a regular expression, and get back file paths with line numbers and the matching lines. This is how you LOCATE code: search first for the symbol, string or call you need, then read_file that path around the line it names. Reading a large file in windows to find one function wastes the budget you need for the edit. This searches THIS project only — use search_references for the read-only reference library, and glob when you want file names rather than contents. Generated Flyt run history and build/vendor trees are excluded; authored configuration remains searchable, including .flyt/config.json.",
   "provider": "builtin",
   "enabled": true,
   "effects": [

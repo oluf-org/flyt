@@ -446,7 +446,7 @@ export class RunController {
     return { hostKey: acquired.hostKey, hostRecord: acquired.record, meta, desktopBlockOverride };
   }
 
-  async resume({ projectId, runId, workerOverride = null, blockId = null, hostOverrides = null }) {
+  async resume({ projectId, runId, workerOverride = null, blockId = null, hostOverrides = null, afterSettled = null }) {
     const existing = this.get(projectId, runId);
     if (existing?.phase !== 'settled' && existing && !workerOverride) return { runId, run: existing.run, control: await this.continue(projectId, runId) };
     return this.#launch(projectId, runId, async op => {
@@ -465,7 +465,7 @@ export class RunController {
           executionWorld: hostRecord.host.metadata?.executionWorld ?? meta.executionWorld ?? null,
         } });
       }
-      this.#register(projectId, hostKey, hostRecord, run, null, op);
+      this.#register(projectId, hostKey, hostRecord, run, afterSettled, op);
       if (this.#closing || op.abort.signal.aborted) await this.stop(projectId, runId);
       else if (op.requested === 'pause') await this.pause(projectId, runId);
       return { runId, run };
@@ -476,7 +476,7 @@ export class RunController {
     });
   }
 
-  async restartBlock({ projectId, runId, blockId, guidance = '', worker = null, hostOverrides = null }) {
+  async restartBlock({ projectId, runId, blockId, guidance = '', worker = null, hostOverrides = null, afterSettled = null }) {
     return this.#launch(projectId, runId, async op => {
     await this.reconcile(projectId, runId);
     this.#checkLaunch(op);
@@ -489,7 +489,7 @@ export class RunController {
     try {
       this.#checkLaunch(op);
       const { run } = await this.#restartBlock(hostRecord.host, runId, blockId, String(guidance ?? ''), reconfigured);
-      this.#register(projectId, hostKey, hostRecord, run, null, op);
+      this.#register(projectId, hostKey, hostRecord, run, afterSettled, op);
       if (this.#closing || op.abort.signal.aborted) await this.stop(projectId, runId);
       else if (op.requested === 'pause') await this.pause(projectId, runId);
       return { runId, run };

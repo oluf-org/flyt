@@ -2,7 +2,7 @@ import type { BlockDefinition, BlockRun } from '../blocks/types.js';
 import type { JsonValue } from '../types.js';
 import { runAgentLoop } from '../blocks/run.js';
 import { executeTaskGraph } from './blocks-task-graph.js';
-import { evaluators, digest, JUDGE_SYSTEM, validateResult } from '../evaluation/registry.js';
+import { evaluators, digest, JUDGE_SYSTEM, validateResult, validateJudgeEvidence } from '../evaluation/registry.js';
 import type { Request } from '../evaluation/registry.js';
 import { parseListOutput } from '../blocks/list-output.js';
 
@@ -34,6 +34,8 @@ export const robustEvaluationBlock: BlockDefinition = {
     let target = run.config.target ?? 'artifact';
     const targetId = `${run.blockId}-candidate`;
     let outcome: any = null, artifact = request.artifact, runtime: any = {};
+    const bound = await (run.ctx as typeof run.ctx & { goalEvaluationEvidence?: (trial: string, artifact: Request['artifact']) => Promise<any> }).goalEvaluationEvidence?.(request.trialId, artifact);
+    if (bound) runtime = bound;
     let candidateIntent = false, savedCandidate: any = null;
     for await (const event of session.read(run.context?.after)) {
       const data = event.data as any;
@@ -127,7 +129,9 @@ export const robustEvaluationBlock: BlockDefinition = {
             tools: [], ceiling: [], maxSteps: 1, maxTokens: 8192, temperature: 0, isolated: true, signal: run.signal });
           raw = response.content;
           if (response.stopped !== 'answered' || response.finishReason === 'length' || response.finishReason === 'content_filter') throw new Error(`Judge did not complete: ${response.reason ?? response.finishReason ?? response.stopped}`);
-          try { return JSON.parse(raw); } catch { error = 'Return one strictly valid JSON object, with the fixed dimension schema.'; }
+          try {
+            const value = JSON.parse(raw); validateJudgeEvidence(value, config, packet); return value;
+          } catch (invalid) { error = `Repair evaluator output against the same stored artifacts: ${(invalid as Error).message}. Return valid JSON and exact artifact citations.`; }
         }
         throw new Error(`Invalid judge JSON after bounded repair: ${raw.slice(0, 500)}`);
       }),

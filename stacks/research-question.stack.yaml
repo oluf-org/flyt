@@ -1,0 +1,32 @@
+version: 2
+id: research-question
+name: Research a question
+description: Get a focused answer grounded in project files, supplied material, or opened sources.
+launchable: true
+presets:
+  project:
+    name: Project evidence
+    default: true
+    overrides:
+      research:
+        evidenceMode: project
+  web:
+    name: Project and web sources
+    overrides:
+      research:
+        evidenceMode: web
+  input:
+    name: Supplied material only
+    overrides:
+      research:
+        evidenceMode: input
+blocks:
+  - id: research
+    use: flyt-blocks-delivery:research-question
+    title: Investigate the question
+    config:
+      modelTier: standard
+      maxCalls: 40
+      maxMinutes: 15
+      hardMaxSteps: 35
+      evidenceMode: project

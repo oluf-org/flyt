@@ -1,5 +1,6 @@
 import { clipboard, app, BrowserWindow, ipcMain, shell, Menu, dialog, Notification } from 'electron';
 import path from 'node:path';
+import { resolveChangedRepoPath } from '../core/repoChanges.js';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { applySearchProviderKeys, createEngine } from '../core/engine.js';
@@ -474,6 +475,7 @@ bindIpc('workflow:answer', (projectId, runId, questionId, answer = '') =>
   ({ projectId, runId, questionId, answer }));
 bindIpc('run:list', projectId => ({ projectId }));
 bindIpc('run:log', (projectId, runId) => ({ projectId, runId }));
+bindIpc('run:changes', (projectId, runId) => ({ projectId, runId }));
 bindIpc('run:snapshot', (projectId, runId, options) => ({ projectId, runId, includeLog: options?.includeLog === true }));
 bindIpc('run:block-history', (projectId, runIds) => ({ projectId, runIds }));
 bindIpc('run:debug', (projectId, runId) => ({ projectId, runId }));
@@ -590,6 +592,12 @@ ipcMain.handle('app:approvalGate', (_e, info = {}) => {
 // leaving the canvas silently stale until an unrelated change happened to resend
 // the field.
 ipcMain.handle('run:openFolder', (_e, projectId, runId) => shell.openPath(proj(projectId).store.runDir(runId)));
+ipcMain.handle('run:openChangedFile', async (_e, projectId, runId, relPath) => {
+  const target = resolveChangedRepoPath(proj(projectId).store, runId, relPath);
+  const error = await shell.openPath(target);
+  if (error) throw new Error(error);
+  return { ok: true };
+});
 ipcMain.handle('run:revealLog', (_e, projectId, runId) => {
   const dir = proj(projectId).store.runDir(runId);
   const target = ['session.jsonl', 'log.jsonl'].map(name => path.join(dir, name)).find(file => fs.existsSync(file));

@@ -18,7 +18,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileHost } from './fileHost.js';
-import { globToRegExp } from './glob.js';
+import { globToRegExp, isIgnoredProjectPath } from './glob.js';
 import { readFileShaped, toEol } from './textFile.js';
 
 const DEFAULT_MAX_RESULTS = 40;
@@ -27,7 +27,6 @@ const DEFAULT_MAX_PER_FILE = 5;
 // Same skip list as glob, and for the same reason: a match in node_modules is
 // never the answer to "where is our code that does X", and one vendored copy of
 // a common word floods every result.
-const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', 'out', 'coverage', '.next', '.cache', '__pycache__', '.venv', 'venv', 'target', 'vendor']);
 const MAX_FILES_SCANNED = 4000;
 // A file that is one long line, or a binary that slipped past the extension
 // check, is not something a line-oriented search should try to render.
@@ -43,7 +42,8 @@ export default {
     'search first for the symbol, string or call you need, then read_file that path around the',
     'line it names. Reading a large file in windows to find one function wastes the budget you',
     'need for the edit. This searches THIS project only — use search_references for the',
-    'read-only reference library, and glob when you want file names rather than contents.'
+    'read-only reference library, and glob when you want file names rather than contents.',
+    'Generated Flyt run history and build/vendor trees are excluded; authored configuration remains searchable, including .flyt/config.json.'
   ].join(' '),
   effects: ['read'],
   // A search whose results are cut to the 2,000-char default returns a handful
@@ -127,8 +127,8 @@ export default {
       for (const entry of entries) {
         if (truncated) return;
         const abs = path.join(dir, entry.name);
+        if (isIgnoredProjectPath(host.rel(abs))) continue;
         if (entry.isDirectory()) {
-          if (SKIP_DIRS.has(entry.name)) continue;
           walk(abs);
           continue;
         }
@@ -223,7 +223,7 @@ async function searchSeam(host, args, ctx) {
   let truncated = false;
   for (const entry of entries) {
     if (entry.kind !== 'file') continue;
-    if (entry.path.split('/').some(segment => SKIP_DIRS.has(segment))) continue;
+    if (isIgnoredProjectPath(entry.path)) continue;
     const rel = prefix && entry.path.startsWith(`${prefix}/`) ? entry.path.slice(prefix.length + 1) : entry.path;
     if (nameFilter && !nameFilter.test(rel)) continue;
     if (++filesScanned > MAX_FILES_SCANNED) { truncated = true; break; }

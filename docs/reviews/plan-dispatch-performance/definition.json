@@ -1,0 +1,233 @@
+{
+  "name": "Plan & dispatch — GLM 5.3 Flash performance",
+  "objective": "Improve supplemental Plan & dispatch planner guidance for efficient parallel work and complete, verifiable outputs. Produce the complete reusable prompt as candidate.text. Optimize against development feedback; the runtime evaluates actual production planning calls. Full dispatch latency is measured separately and must not be claimed from planner-only results.",
+  "constraints": "Keep task coverage, hard dependencies, artifact handoffs and declared write conflicts correct. Avoid unnecessary sequential phases and redundant workers. Never claim timings or passing checks yourself. Do not embed benchmark-specific answers, IDs or domain facts in the reusable prompt. No tools or changes to project code.",
+  "folder": "D:\\electron\\llm-flow",
+  "worker": {
+    "provider": "openrouter",
+    "model": "z-ai/glm-5.3-flash"
+  },
+  "tools": [],
+  "criteria": [],
+  "tests": [],
+  "maxParallel": 3,
+  "plateau": 3,
+  "limits": {
+    "iterations": 3,
+    "calls": 50,
+    "minutes": 25,
+    "usd": 2
+  },
+  "selfRedesign": false,
+  "reviewResults": false,
+  "recipe": "version: 2\nid: improve-dispatch-planning\nname: \"improve-dispatch-planning\"\nblocks:\n  - id: improve\n    use: flyt-blocks-core:general-analysis\n    config:\n      maxTokens: 8192\n      systemPrompt: \"Revise reusable supplemental task-graph planning guidance using the fixed objective and actual development feedback. Return exactly one JSON object {\\\"candidate\\\":{\\\"text\\\":\\\"complete guidance under 250 words\\\"},\\\"findings\\\":[\\\"one concise evidence-based rationale\\\"]}. Do not return a task graph. Do not simulate subsequent iterations. Do not claim your candidate passed evaluation. Keep the block invariant safety contract intact.\"\n      instructions: \"Improve the best available candidate or begin from the production invariant guidance. Explicitly distinguish independent deliverables from necessary consolidation. Require self-contained worker goals with source facts and observable acceptance checks. Only add dependencies for actual required outputs or write conflicts. Keep guidance short and do not overfit the development cases.\"\n",
+  "evaluation": {
+    "version": 1,
+    "target": "task-graph",
+    "targetConfig": {
+      "minTasks": 1,
+      "maxTasks": 6,
+      "parallelism": "high"
+    },
+    "baseline": {
+      "text": "Follow the task-graph block invariant guidance.",
+      "provenance": {
+        "kind": "Production planner with neutral supplemental instruction"
+      }
+    },
+    "suite": {
+      "id": "plan-dispatch-performance",
+      "version": 1,
+      "name": "Concurrency and executable output coverage",
+      "evaluators": [
+        {
+          "id": "block-contract",
+          "version": 1,
+          "name": "contract",
+          "mandatory": true,
+          "config": {
+            "block": "task-graph",
+            "options": {
+              "readOnly": true
+            }
+          }
+        },
+        {
+          "id": "runtime",
+          "version": 1,
+          "name": "runtime",
+          "mandatory": false,
+          "config": {}
+        },
+        {
+          "id": "ai-rubric",
+          "version": 1,
+          "name": "quality",
+          "mandatory": true,
+          "config": {
+            "model": "z-ai/glm-5.3-flash",
+            "repairs": 1,
+            "rubric": "Evaluate executable planning quality, not self-claims. Full marks require all requested facts and checks to reach the right worker; edges must reflect real input requirements. Penalize missing coverage, duplicate effort, serial busywork, and unsafe implied parallel writes. Do not reward verbosity or number of tasks.",
+            "dimensions": [
+              {
+                "id": "coverage",
+                "description": "Self-contained goals preserve each requested deliverable, source facts, constraints, and observable verification.",
+                "mandatory": true,
+                "minimum": 3
+              },
+              {
+                "id": "parallelism",
+                "description": "Independent work can overlap; true prerequisite outputs are produced and required; no redundant stages.",
+                "mandatory": true,
+                "minimum": 3
+              }
+            ]
+          }
+        }
+      ],
+      "cases": [
+        {
+          "id": "independent-reports",
+          "split": "development",
+          "repeats": 2,
+          "input": "Read-only benchmark using only the facts in this request. Produce exactly three independent worker answers, each covering its own numbered work package. Do not write files, use tools, or add a coordinator. Each worker verifies its own arithmetic and quotes the input values it used.\n1. INVENTORY: apples=12, pears=0, plums=8. Report TOTAL=20, preserve the zero stock item, and name pears as out of stock.\n2. LATENCY: before=240 ms, after=150 ms. Report REDUCTION=37.5% with (240-150)/240*100, and state these two numbers alone do not establish statistical significance.\n3. RELEASE: API work=2 days, UI work=3 days, run concurrently from day 1; QA=1 day after both, release=day 5. Report QA=day 4, RELEASE=day 5, and one rollback verification check. This is an analysis work package, not instructions to split more workers.\nReturn each result in no more than 130 words. Preserve all requested outputs. No invented measurements.",
+          "requirements": "Three independent self-verifying read-only work packages; no coordination dependency.",
+          "evaluators": [
+            {
+              "id": "json-schema",
+              "version": 1,
+              "name": "independent",
+              "mandatory": true,
+              "config": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tasks": {
+                      "type": "array",
+                      "minItems": 3,
+                      "maxItems": 3,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "dependsOn": {
+                            "type": "array",
+                            "maxItems": 0
+                          },
+                          "writeFiles": {
+                            "type": "array",
+                            "maxItems": 0
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "required-consolidation",
+          "split": "development",
+          "repeats": 2,
+          "input": "Read-only, no tools. Produce three worker deliverables: (1) analyze import validation using facts: reject corrupt JSON, preserve unknown fields, support version 1; (2) independently analyze recovery using facts: backup before replacing data, atomic writes, restore on failure; (3) produce one acceptance checklist using BOTH finished analyses. First two tasks must run independently; final checklist requires both outputs. Each analysis verifies its own coverage. Do not write files.",
+          "requirements": "Exactly two independent analyses and one consolidation requiring both artifacts; all facts and observable checks survive.",
+          "evaluators": [
+            {
+              "id": "json-schema",
+              "version": 1,
+              "name": "merge-dependencies",
+              "mandatory": true,
+              "config": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tasks": {
+                      "type": "array",
+                      "minItems": 3,
+                      "maxItems": 3,
+                      "contains": {
+                        "type": "object",
+                        "properties": {
+                          "dependsOn": {
+                            "type": "array",
+                            "minItems": 2
+                          },
+                          "requires": {
+                            "type": "array",
+                            "minItems": 2
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "held-out-independent",
+          "split": "held-out",
+          "repeats": 2,
+          "input": "Read-only no tools. Give exactly three independent, self-verifying work packages with final answers: calculate solar panel totals from east=7 west=5; calculate water use reduction from 80 liters to 60 liters and explain sampling limitations; plan independent paint=2 days and plumbing=4 days followed by 1 inspection day, completion by day 6. No coordinator, files, or shared outputs.",
+          "requirements": "Three independent complete goals with arithmetic, limitations and schedule checks.",
+          "evaluators": [
+            {
+              "id": "json-schema",
+              "version": 1,
+              "name": "held-out-independent",
+              "mandatory": true,
+              "config": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "tasks": {
+                      "type": "array",
+                      "minItems": 3,
+                      "maxItems": 3,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "dependsOn": {
+                            "type": "array",
+                            "maxItems": 0
+                          },
+                          "writeFiles": {
+                            "type": "array",
+                            "maxItems": 0
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "ranking": {
+      "primary": "gateRate",
+      "tieBreakers": [
+        "runtime.tokens",
+        "runtime.latencyMs"
+      ],
+      "minImprovement": 0
+    },
+    "targetThreshold": {
+      "metric": "runtime.latencyMs",
+      "value": 6000,
+      "direction": "lower"
+    },
+    "finalVerification": {
+      "required": true
+    },
+    "promotion": {
+      "mode": "off",
+      "limit": 0,
+      "confirmation": "fresh-evaluation"
+    }
+  }
+}

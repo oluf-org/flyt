@@ -372,7 +372,7 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
 
     if (signal?.aborted) {
       stopped = 'cancelled';
-      reason = 'Stopped before the step began.';
+      reason = 'Stopped before the next model step. Earlier tool activity may have changed files; inspect the retained results.';
       break;
     }
 
@@ -900,7 +900,8 @@ export async function runAgentLoop(options: LoopOptions): Promise<LoopResult> {
           content: `Durable checkpoint after ${call.name} (${call.id}) at step ${step}. Resume from the current workspace state without replaying this write.`,
         } });
       }
-      const repeated = progress.record(call, Boolean(result.error), tokensSinceDurableProgress);
+      const repeated = progress.record(call, Boolean(result.error), tokensSinceDurableProgress,
+        ctx.tools.get(call.name)?.classification?.effect === 'read');
       if (repeated.warning) {
         await session.append({ type: 'tool.repetition', data: {
           blockId, callId: call.id, name: call.name, args: call.args,

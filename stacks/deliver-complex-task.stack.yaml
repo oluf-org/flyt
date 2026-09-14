@@ -1,0 +1,15 @@
+version: 2
+id: deliver-complex-task
+name: Deliver a complex task
+description: Complete substantial work in verified milestones, preserving progress and checking the integrated result.
+launchable: true
+blocks:
+  - id: delivery
+    use: flyt-blocks-delivery:complex-delivery
+    title: Deliver verified milestones
+    config:
+      modelTier: standard
+      maxCalls: 400
+      maxMinutes: 120
+      hardMaxSteps: 80
+      repairPasses: 2

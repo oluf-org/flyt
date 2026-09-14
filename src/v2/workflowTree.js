@@ -11,9 +11,9 @@ function generatedTaskId(node) {
 }
 
 /**
- * Rebuild the execution waves used by Plan & dispatch from its durable child
- * records. Each wave can run side by side; dependency-bound work follows in a
- * later row. The bounded fallback also keeps malformed historical data visible.
+ * Group Plan & dispatch children into bounded dependency rows for layout.
+ * Rows are not execution barriers: ready work can start as soon as a slot opens.
+ * The bounded fallback also keeps malformed historical data visible.
  */
 export function generatedTaskWaves(children, config = {}) {
   const rows = (Array.isArray(children) ? children : []).map((node, index) => ({

@@ -575,10 +575,9 @@ function TaskTally({ tally, className }) {
 }
 
 /**
- * One wave of dispatched work. The rail and its numbered pip carry the shape —
- * these tasks start together, and the next wave waits on this one — so the row
- * itself needs no box: cards wrap to the width they are given rather than
- * being squeezed into a lane each.
+ * One layout group of dispatched work. Groups do not synchronize execution:
+ * each task starts when its dependencies and an available worker slot permit.
+ * Cards wrap to the available width without implying a barrier between rows.
  */
 function GeneratedTaskWave({ tasks, index, root, blocks, selected, setSelected, touched, dragging, setDragging,
   dropTarget, setDropTarget, run, preview, onDelete, onError }) {
@@ -593,8 +592,8 @@ function GeneratedTaskWave({ tasks, index, root, blocks, selected, setSelected, 
   return <li className="be-wave" data-wave={index + 1}>
     <header className="be-wave-head">
       <span className="be-wave-pip" aria-hidden="true">{index + 1}</span>
-      <strong>Wave {index + 1}</strong>
-      <small>{tasks.length === 1 ? 'runs alone' : `${tasks.length} in parallel`}</small>
+      <strong title="Tasks start as their dependencies finish and worker slots become available.">Group {index + 1}</strong>
+      <small>{tasks.length === 1 ? '1 task' : `${tasks.length} tasks`} · starts when ready</small>
       {run && <TaskTally tally={taskTally(run, tasks)} className="be-wave-tally" />}
     </header>
     <div className="be-wave-tasks">
@@ -602,7 +601,7 @@ function GeneratedTaskWave({ tasks, index, root, blocks, selected, setSelected, 
       {abbreviated && !expanded && <button type="button" className="be-wave-more" aria-expanded={false}
         onClick={() => setExpanded(true)}>
         <strong>+{hidden.length} more</strong>
-        <span>Same wave, same start</span>
+        <span>Show remaining tasks</span>
         {run && <TaskTally tally={taskTally(run, hidden)} className="be-wave-more-tally" />}
       </button>}
       {abbreviated && expanded && hidden.map(child)}
@@ -675,7 +674,7 @@ function NodeView({ node, root, blocks, commands, selected, setSelected, touched
       <div className="be-dispatch-panel">
         <header className="be-dispatch-head">
           <span className="be-dispatch-label">Generated tasks</span>
-          <span className="be-dispatch-meta">{generated.length === 1 ? '1 task' : `${generated.length} tasks`} · {waves.length === 1 ? '1 wave' : `${waves.length} waves`} · created for this run</span>
+          <span className="be-dispatch-meta">{generated.length === 1 ? '1 task' : `${generated.length} tasks`} · {waves.length === 1 ? '1 group' : `${waves.length} groups`} · created for this run</span>
           {run && <span className="be-dispatch-progress" title={tally.map(([state, count]) => `${count} ${taskStatusLabel(state)}`).join(' · ')}>
             <span className="be-dispatch-meter" aria-hidden="true">{tally.map(([state, count]) =>
               <i key={state} className={`is-${state}`} style={{ flexGrow: count }}/>)}</span>

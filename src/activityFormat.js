@@ -7,7 +7,7 @@ export function elapsed(ms) {
   const minutes = Math.floor(seconds / 60);
   return minutes < 60 ? `${minutes}m ${seconds % 60}s` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
-export const loopLabel = status => ({ achieved: 'Achieved', plateau: 'No further gain', limit_reached: 'Budget reached',
+export const loopLabel = status => ({ achieved: 'Achieved', completed: 'Search completed', plateau: 'No further gain', limit_reached: 'Budget reached',
   needs_input: 'Needs input', cleanup_failed: 'Cleanup needs attention', finishing: 'Finishing', ready: 'Ready',
   running: 'Running', paused: 'Paused', interrupted: 'Interrupted', stopped: 'Stopped', failed: 'Failed',
   stopping: 'Stopping', pausing: 'Pausing' }[status] ?? status);

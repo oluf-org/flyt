@@ -97,8 +97,13 @@ export function createLocalSandbox(
         mode: 'workspace-write', workspaceRoot: workspace, owner: { runId: 'probe', callId: 'probe' },
         privateTemp: temp, minimumEnforcement: selected.enforcement,
       };
-      const confined = await wrap([node, '-e', `const f=require('fs');f.writeFileSync(${JSON.stringify(path.join(workspace, 'allowed'))},'ok');try{f.writeFileSync(${JSON.stringify(outside)},'bad')}catch{};if(f.existsSync(${JSON.stringify(outside)}))process.exit(41)`], policy);
-      const env = layeredEnv(scrubbedParentEnv(), { TMPDIR: temp, TEMP: temp, TMP: temp }, confined.env ?? {});
+      const confined = await wrap([node, '-e', `const f=require('fs');f.writeFileSync(${JSON.stringify(path.join(workspace, 'allowed'))},'ok');try{f.writeFileSync(${JSON.stringify(outside)},'bad')}catch{};if(f.existsSync(${JSON.stringify(outside)}))process.exit(41);const child=require('child_process').spawnSync(process.execPath,['-e',"process.stdout.write('flyt-child-ok')"],{timeout:3000,encoding:'utf8'});console.log(JSON.stringify({nodePipedChildren:!child.error&&child.status===0&&child.stdout==='flyt-child-ok'}))`], policy);
+      // In the desktop host execPath is Electron. Run this fixed filesystem
+      // probe as Node rather than starting another desktop application. This
+      // applies only to the probe; it does not change a workflow's environment
+      // or bypass the restricted-token runner and its outside-write check.
+      const env = layeredEnv(scrubbedParentEnv(), { TMPDIR: temp, TEMP: temp, TMP: temp },
+        process.versions.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}, confined.env ?? {});
       const handle = subprocess.spawn({
         owner: policy.owner, argv: confined.argv as [string, ...string[]], cwd: workspace, env,
         stdout: { maxBytes: 16_384 }, stderr: { maxBytes: 16_384 }, timeoutMs: 15_000, graceMs: 500,
@@ -107,8 +112,10 @@ export function createLocalSandbox(
       const outcome = await handle.done;
       const ok = outcome.exitCode === 0 && !outcome.runnerFailed
         && fs.existsSync(path.join(workspace, 'allowed')) && !fs.existsSync(outside);
+      let nodePipedChildren = false;
+      try { nodePipedChildren = JSON.parse(handle.stdout.text.trim()).nodePipedChildren === true; } catch { /* Unsupported unless positively observed. */ }
       return ok
-        ? { platform: process.platform, backend: selected.name, available: true, enforcement: selected.enforcement, checkedAt }
+        ? { platform: process.platform, backend: selected.name, available: true, enforcement: selected.enforcement, checkedAt, nodePipedChildren }
         : { platform: process.platform, backend: selected.name, available: false, enforcement: null, checkedAt,
             reason: actionableReason(outcome.runnerFailed?.detail || handle.stderr.text || `functional probe exited ${outcome.exitCode}`) };
     } catch (error) {

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import Ajv from 'ajv';
 import { bootKernel } from './v2.js';
 import { serializeStack } from './stackstore.js';
@@ -11,6 +12,10 @@ import { goalFolder, goalRequirements, validateRequiredPaths } from './goalRequi
 import { readSessionLogFile } from '#kernel';
 import { acquireOwner, ownerAlive, readOwner, writeAtomic, abortable, bounded as waitBounded } from './executionOwnership.js';
 import { validateEvaluation, validateSuite, evaluationRecipe, evaluateCandidate, targetMet, rank, digest } from './evaluation.js';
+import { validateCampaign, initialCampaignState } from './campaignPolicy.js';
+import { driveCampaign, resumeCampaignConfirmation, campaignPacket } from './goalCampaign.js';
+import { retrieveLearning, recordLearning } from './goalLearning.js';
+import { workflowMeasurements } from './workflowMeasurements.js';
 
 const clone = value => structuredClone(value);
 const id = () => crypto.randomUUID();
@@ -54,7 +59,7 @@ function immutable(file, value, exclusive = false) {
     return read(file);
   } finally { fs.unlinkSync(temporary); }
 }
-const terminal = new Set(['achieved', 'limit_reached', 'plateau', 'needs_input', 'failed', 'stopped']);
+const terminal = new Set(['achieved', 'completed', 'limit_reached', 'plateau', 'needs_input', 'failed', 'stopped']);
 export function validateGoalTools(tools) {
   if (!Array.isArray(tools) || tools.some(tool => typeof tool !== 'string')) throw new Error('Tools must be a list');
   const forbidden = tools.filter(tool => /task|reference|run_log|read_run|other_run|agent|workflow|goal/i.test(tool));
@@ -99,7 +104,7 @@ export function sameGoalFolder(a, b) {
 export class GoalController {
   constructor({ runs, project, worker, sandbox = {}, emit = () => {} }) {
     this.runs = runs; this.project = project; this.worker = worker; this.sandbox = sandbox; this.emit = emit;
-    this.live = new Map(); this.registry = null; this.closing = false;
+    this.live = new Map(); this.registry = null; this.closing = false; this.canonicalStates = new WeakMap();
   }
   root(projectId) { return path.join(this.project(projectId).store.rootDir, 'goals'); }
   file(projectId, goalId) { return path.join(this.root(projectId), safe(goalId), 'state.json'); }
@@ -123,7 +128,19 @@ export class GoalController {
     return fs.readdirSync(root).filter(name => fs.existsSync(path.join(root, name, 'state.json')))
       .map(name => this.get(projectId, name)).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
-  save(state) { state.updatedAt = new Date().toISOString(); write(this.file(state.projectId, state.id), state); this.emit(state.projectId, state.id, state); }
+  save(state) { state = this.canonicalStates.get(state) ?? state; state.updatedAt = new Date().toISOString(); write(this.file(state.projectId, state.id), state); this.emit(state.projectId, state.id, state); }
+  trialRecord(record, key) {
+    if (!record.state.contract.campaign) return record;
+    const state = record.state; state.activeTrials ??= {};
+    // Only child ownership varies by trial; usage, limits and checkpoints share
+    // one canonical state. Save never serializes a trial's proxy projection.
+    const proxy = new Proxy(state, {
+      get: (target, name) => name === 'activeChild' ? target.activeTrials[key] ?? null : target[name],
+      set: (target, name, value) => { if (name === 'activeChild') { if (value) target.activeTrials[key] = value; else delete target.activeTrials[key]; } else target[name] = value; return true; },
+    });
+    this.canonicalStates.set(proxy, state);
+    return new Proxy(record, { get: (target, name) => name === 'state' ? proxy : target[name], set: (target, name, value) => { target[name] = value; return true; } });
+  }
   recordPath(state, name) { return path.join(path.dirname(this.file(state.projectId, state.id)), `${safe(name)}.json`); }
   putRecord(state, name, value) { return immutable(this.recordPath(state, name), value); }
   evaluationFolder(state, phase) {
@@ -196,10 +213,12 @@ export class GoalController {
     if (!Number.isInteger(plateau) || plateau < 1 || plateau > 1000) throw new Error('Plateau must be 1–1000');
     validateGoalTools(input.tools ?? []);
     const evaluation = input.evaluation ? validateEvaluation(input.evaluation) : null;
+    const campaign = validateCampaign(input.campaign, evaluation, limits);
+    if (campaign && ((input.tools ?? []).length || tests.length || criteria.some(c => c.type === 'file_contains'))) throw new Error('Campaign search currently requires tool-free candidates and isolated typed suite checks');
     if (evaluation && evaluation.finalVerification.required && (input.tools ?? []).length) throw new Error('Independent held-out verification is unavailable with broad candidate or optimizer tools. Folder focus is not filesystem secrecy. Use a fresh tool-free experiment.');
     if (evaluation?.targetConfig && Object.keys(evaluation.targetConfig).some(k => !['maxTasks', 'minTasks', 'parallelism', 'maxTokens', 'maxOutputWords'].includes(k))) throw new Error('Unsupported fixed block settings; model, prompts, response and recovery policy belong to their explicit contract fields');
     return {
-      version: evaluation ? 2 : 1, ...(evaluation ? { evaluation, evaluationPolicy: 'robust-v1' } : { evaluationPolicy: 'legacy-containment-v1' }), objective: bounded(input.objective, 8000, 'Objective'),
+      version: campaign ? 3 : evaluation ? 2 : 1, ...(evaluation ? { evaluation, evaluationPolicy: 'robust-v1' } : { evaluationPolicy: 'legacy-containment-v1' }), ...(campaign ? { campaign } : {}), objective: bounded(input.objective, 8000, 'Objective'),
       constraints: String(input.constraints ?? '').slice(0, 8000), criteria: clone(criteria), tests: clone(tests), requiredPaths,
       folder, folderIdentity: identity(folder), folderMode: 'focus', createFolder: Boolean(input.createFolder), limits, maxParallel, plateau,
       selfRedesign: Boolean(input.selfRedesign), reviewAi: Boolean(input.reviewAi), reviewResults: Boolean(input.reviewResults),
@@ -212,6 +231,7 @@ export class GoalController {
     const contract = this.contract(definition, projectId);
     if (!contract.worker?.model) throw new Error('Select a connected model before starting a Goal');
     await this.validateSource(definition.recipe, contract);
+    if (contract.campaign && contract.evaluation.target === 'workflow') await this.validateSource(contract.evaluation.baseline.source, contract);
     if (definition.setup) await this.validateSource(definition.setup, contract);
     if (contract.evaluation?.referencePreparation && !definition.setup) throw new Error('Reference preparation requires a fixed Setup once workflow');
     const state = {
@@ -223,6 +243,12 @@ export class GoalController {
       calls: 0, knownUsd: 0, unknownCostCalls: 0, elapsedMs: 0, plateauCount: 0,
       best: null, current: null, memory: [], history: [],
     };
+    if (contract.campaign) {
+      state.campaign = initialCampaignState();
+      const kernelRoot = path.dirname(fileURLToPath(import.meta.resolve('#kernel')));
+      state.runtimeFingerprint = digest(['plugins/blocks-task-graph.js', 'plugins/blocks-evaluation.js', 'plugins/stack-runner.js', 'evaluation/registry.js', 'blocks/run.js']
+        .map(file => ({ file, digest: hash(fs.readFileSync(path.join(kernelRoot, file))) })));
+    }
     if (contract.evaluation) {
       state.benchmark = clone(contract.evaluation.suite); state.referenceRevision = 0; state.promotions = [];
       state.bestPartial = null; state.holdout = { exposed: false, usedBy: null };
@@ -286,6 +312,7 @@ export class GoalController {
   }
   history({ projectId, goalId, query = '', offset = 0, limit = 10 }) {
     const state = this.get(projectId, goalId);
+    if (state.contract.campaign) return retrieveLearning(this, state, query, limit);
     return state.history.filter(item => JSON.stringify(item).toLowerCase().includes(String(query).toLowerCase()))
       .slice(Math.max(0, Number(offset) || 0), Math.max(0, Number(offset) || 0) + Math.min(20, Math.max(1, Number(limit) || 10)));
   }
@@ -332,6 +359,7 @@ export class GoalController {
     // A closed application is not execution time. Count only activity recorded
     // before interruption; retain all previously charged calls and spend.
     if (state.activeSince) state.elapsedMs += Math.max(0, (state.elapsedCheckpointAt ?? Date.parse(state.updatedAt)) - state.activeSince) || 0;
+    if (state.pricingPause) { state.pricingPause = null; state.pricingAcknowledgedAt = state.calls; }
     const record = { state, release, task: null, requested: null, began: Date.now(), timer: null, abort: new AbortController() };
     this.live.set(goalId, record);
     state.activeSince = record.began; state.elapsedCheckpointAt = record.began; state.status = 'running'; state.reason = 'Running'; this.save(state);
@@ -353,8 +381,12 @@ export class GoalController {
     record.task = this.drive(record).then(() => {
       if (record.requested) this.check(record);
     }).catch(error => {
-      state.status = record.requested === 'limit' || error.code === 'goal_limit' ? 'limit_reached' : record.requested === 'pause' ? 'paused' : record.requested === 'stop' ? 'stopped' : error.code === 'goal_cleanup_pending' ? 'cleanup_failed' : 'failed';
+      state.status = record.requested === 'limit' || error.code === 'goal_limit' ? 'limit_reached' : record.requested === 'pause' || error.code === 'campaign_pricing' ? 'paused' : record.requested === 'stop' ? 'stopped' : error.code === 'goal_cleanup_pending' ? 'cleanup_failed' : 'failed';
       state.reason = state.status === 'limit_reached' ? this.limitReason(record) : String(error.message ?? error);
+      if (state.contract.campaign && state.iterationIntent) {
+        const file = this.recordPath(state, `experiment-${state.iterationIntent.number}`);
+        if (fs.existsSync(file)) recordLearning(this, state, { ...read(file), outcome: ['paused', 'stopped'].includes(state.status) ? 'cancelled' : state.status === 'limit_reached' ? 'budget_expired' : 'infrastructure_error' }, null);
+      }
       if (state.status === 'failed') state.failureReason = state.reason;
       this.save(state);
     }).finally(() => {
@@ -396,9 +428,11 @@ export class GoalController {
     record.state.status = action === 'pause' ? 'pausing' : 'stopping';
     record.state.reason = action === 'pause' ? 'Pausing execution' : 'Stopping execution';
     record.state.controlIntent = action; this.save(record.state);
-    if (record.state.activeChild) {
-      const result = await this.runs.stop(projectId, record.state.activeChild.runId, `Goal ${action}`);
-      if (result?.ok === false && result.code !== 'run_not_live') throw new Error(result.message || 'Could not signal the child run; try Stop again');
+    const children = [record.state.activeChild, ...Object.values(record.state.activeTrials ?? {})].filter(Boolean);
+    const stopped = await Promise.allSettled(children.map(child => this.runs.stop(projectId, child.runId, `Goal ${action}`)));
+    for (const result of stopped) {
+      if (result.status === 'rejected') throw result.reason;
+      if (result.value?.ok === false && result.value.code !== 'run_not_live') throw new Error(result.value.message || 'Could not signal a child run; try Stop again');
     }
     return clone(record.state);
   }
@@ -423,6 +457,7 @@ export class GoalController {
     state.resultReviews.push({ artifact, digest: expectedDigest, decision, feedback: String(feedback).slice(0, 2000), at: Date.now() });
     state.pendingResult = null;
     if (decision === 'stop') { state.status = 'stopped'; state.reason = 'Stopped during human result review'; }
+    else if (decision === 'approve' && artifact === 'campaign-result') { state.status = record.achieved ? 'achieved' : 'completed'; state.reason = record.reason; }
     else if (decision === 'approve' && record.achieved) { state.status = 'achieved'; state.reason = 'Fixed checks passed and result approved'; }
     else {
       state.status = 'paused'; state.reason = decision === 'changes' ? 'Human requested another iteration' : 'Result reviewed; mandatory checks still incomplete';
@@ -442,6 +477,7 @@ export class GoalController {
     const state = record.state;
     const limits = state.contract.limits;
     if (record.requested) throw Object.assign(new Error(`Goal ${record.requested}`), { code: record.requested === 'limit' ? 'goal_limit' : 'goal_control' });
+    if (state.pricingPause) throw Object.assign(new Error(state.pricingPause), { code: 'campaign_pricing' });
     if (state.calls >= limits.calls || state.elapsedMs + Date.now() - record.began >= limits.minutes * 60000
       || (limits.usd !== null && state.knownUsd >= limits.usd)) {
       record.budgetHit = true;
@@ -449,7 +485,8 @@ export class GoalController {
     }
   }
   packet(state) {
-    const development = summary => { if (!summary) return summary; const { finalVerification, ...safe } = summary; return safe; };
+    const compact = measurement => measurement ? { eligible: measurement.eligible, comparable: measurement.comparable, metrics: measurement.metrics, counts: measurement.counts, feedback: measurement.feedback?.slice(0, 4), reportIds: measurement.reportIds?.slice(0, 6) } : null;
+    const development = summary => { if (!summary) return summary; const { finalVerification, ...safe } = summary; return { ...safe, ...(safe.evaluation ? { evaluation: compact(safe.evaluation) } : {}) }; };
     return {
       goalId: state.id, objective: state.contract.objective, constraints: state.contract.constraints,
       criteria: state.contract.criteria, tests: state.contract.tests, iteration: state.iteration + 1,
@@ -458,7 +495,8 @@ export class GoalController {
       projectRequirements: goalRequirements(state.contract, this.project(state.projectId), { workspace: state.workspace.path }),
       remaining: { calls: state.contract.limits.calls - state.calls, iterations: state.contract.limits.iterations - state.iteration },
       best: development(state.best), current: development(state.current), findings: state.memory,
-      ...(state.contract.evaluation ? { evaluationFeedback: { target: state.contract.evaluation.target, policy: state.contract.evaluation.ranking, developmentCases: state.contract.evaluation.suite.cases.filter(item => item.split === 'development').map(({ id, input, requirements }) => ({ id, input, requirements })), current: state.current?.evaluation ?? null, constraints: 'Only development measurements are supplied. References and held-out cases are private to runtime evaluation.' } } : {}),
+      ...(state.contract.evaluation ? { evaluationFeedback: { target: state.contract.evaluation.target, policy: state.contract.evaluation.ranking, developmentCases: state.contract.evaluation.suite.cases.filter(item => item.split === 'development').map(({ id, input, requirements }) => ({ id, input, requirements })), current: compact(state.current?.evaluation), constraints: 'Only development measurements are supplied. References, validation and final-test cases are private to runtime evaluation.' } } : {}),
+      ...(state.contract.campaign ? { campaign: campaignPacket(this, state) } : {}),
       recipe: state.contract.selfRedesign ? read(this.recordPath(state, `recipe-${state.activeRevision}`)).source : undefined,
       outputContract: 'The FINAL recipe step returns JSON {"candidate":{"text":"your result"},"findings":["short uncertain or observed finding"],"proposal":{"baseRevision":number,"rationale":"why","commands":[{"name":"stack:configure-block","args":{"nodeId":"id","config":{}}}]}}. Intermediate steps and setup return their ordinary block output, following their own schema (for example a task list or an Evaluation verdict); do not wrap those outputs in the Goal envelope. proposal is optional; it edits only the recipe at the next boundary. For workflow optimization, candidate.source is canonical version 2 workflow YAML; fixed tests run through the ordinary engine. Do not claim verification: runtime checks decide success.',
     };
@@ -489,20 +527,72 @@ export class GoalController {
       checkpointInputTokens: 16_000,
       beforeCall: async request => {
         this.check(record);
-        // The adapter compacts against this same bound before accounting and
-        // dispatch. This is an invariant check, not the context recovery path.
+        // Validate before reserving or charging any provider capacity.
         if (JSON.stringify(request.messages ?? []).length > guard.maxMessageChars) throw new Error('Goal context policy did not fit the model request');
         const judgeModels = evaluatorWork ? [...state.contract.evaluation.suite.evaluators, ...state.contract.evaluation.suite.cases.flatMap(c => c.evaluators ?? [])].filter(e => ['reference', 'ai-rubric'].includes(e.id)).map(e => e.config.model) : [];
         if (request.model !== state.contract.worker.model && !judgeModels.includes(request.model)) throw new Error('A descendant cannot change the Goal model contract');
+        const campaign = state.contract.campaign;
+        if (campaign) {
+          const confirmation = state.campaign?.phase === 'confirm';
+          const reserve = campaign.estimatedCallUsd;
+          const usdCeiling = state.contract.limits.usd == null ? Infinity : state.contract.limits.usd - (confirmation ? 0 : campaign.reserveUsd);
+          if (state.calls >= state.contract.limits.calls - (confirmation ? 0 : campaign.reserveCalls)
+            || state.knownUsd + (state.reservedUsd ?? 0) + reserve > usdCeiling) {
+            record.reserveHit = !confirmation;
+            throw Object.assign(new Error('Reserved capacity reached before provider dispatch'), { code: confirmation ? 'goal_limit' : 'campaign_reserve' });
+          }
+          const judgeRepair = /-judge-.*-[1-9]\d*$/.test(request.executionContext?.blockId ?? '');
+          if (judgeRepair && state.campaign.repairCallsUsed >= campaign.repairCalls) throw new Error('Campaign evaluator repair allowance reached');
+          if (judgeRepair) state.campaign.repairCallsUsed++;
+          state.reservedUsd = (state.reservedUsd ?? 0) + reserve;
+        }
         state.calls++; state.unknownCostCalls++; this.save(state);
       },
       afterCall: async result => {
         const cost = result.usage?.cost;
         if (Number.isFinite(cost) && cost >= 0) { state.knownUsd += cost; state.unknownCostCalls--; }
+        if (state.contract.campaign) {
+          if (Number.isFinite(cost) && cost >= 0) state.reservedUsd = Math.max(0, (state.reservedUsd ?? 0) - state.contract.campaign.estimatedCallUsd);
+          else if (state.contract.campaign.unknownPricing === 'pause') state.pricingPause = 'A provider call has unknown pricing. Recorded usage and estimated reservations are retained. Review and resume to acknowledge this uncertainty.';
+        }
+        this.save(state);
+      },
+      callFailed: async () => {
+        if (state.contract.campaign?.unknownPricing === 'pause') state.pricingPause = 'A failed provider attempt has unknown cost. Review and resume to acknowledge the retained reservation.';
         this.save(state);
       },
     };
-    if (!candidateTest && state.iteration > 0) guard.history = async args => {
+    if (evaluatorWork && state.contract.evaluation.target === 'workflow') guard.evaluationEvidence = async (trialId, artifact) => {
+      if (trialId !== phase) throw new Error('Evaluation trial identity does not match its runtime binding');
+      const candidate = read(this.recordPath(state, `child-candidate-${phase}`));
+      if (candidate.output !== artifact.text) throw new Error('Evaluation artifact does not match canonical workflow output');
+      return candidate.runtime ?? workflowMeasurements(this.project(state.projectId).store, candidate.runId);
+    };
+    if (!candidateTest && (state.iteration > 0 || state.contract.campaign)) guard.history = async args => {
+      if (state.contract.campaign) {
+        if (args.candidateId || args.iteration != null) {
+          const candidateId = args.candidateId ?? `candidate-${args.iteration}`;
+          const summary = state.history.find(x => x.candidateId === candidateId);
+          if (candidateId !== 'baseline' && !summary) throw new Error('Only recorded development candidates can be retrieved');
+          const experiment = candidateId === 'baseline' ? { candidate: state.contract.evaluation.baseline } : read(this.recordPath(state, summary.artifact));
+          const text = args.part === 'source' ? experiment.candidate.source ?? '' : experiment.candidate.text;
+          const offset = Math.max(0, Number(args.offset) || 0);
+          return { candidateId, part: args.part ?? 'text', text: text.slice(offset, offset + 8000), nextOffset: offset + 8000 < text.length ? offset + 8000 : null,
+            evidence: [...(experiment.evaluation?.reportIds ?? []), ...(experiment.screen?.reportIds ?? [])].slice(0, 30) };
+        }
+        if (args.reportId) {
+          const allowed = state.history.some(x => {
+            const experiment = read(this.recordPath(state, x.artifact));
+            return [experiment.evaluation, experiment.screen].some(e => e?.split === 'development' && e.reportIds.includes(args.reportId));
+          });
+          if (!allowed) throw new Error('Only development evidence is available to optimizer retrieval');
+          const report = read(this.recordPath(state, args.reportId));
+          const text = JSON.stringify({ checks: report.checks, runtime: report.runtime, evaluations: report.evaluations, artifact: report.artifact });
+          const offset = Math.max(0, Number(args.offset) || 0);
+          return { reportId: args.reportId, text: text.slice(offset, offset + 8000), nextOffset: offset + 8000 < text.length ? offset + 8000 : null };
+        }
+        return retrieveLearning(this, state, args.query ?? '', args.limit ?? 5);
+      }
       if (args.iteration != null) {
         if (!Number.isInteger(args.iteration) || args.iteration < 1 || args.iteration > state.iteration) throw new Error('Only completed iterations in this Goal can be retrieved');
         const result = this.inspect({ projectId: state.projectId, goalId: state.id, record: `iteration-${args.iteration}` });
@@ -566,8 +656,8 @@ export class GoalController {
     if (record.requested) this.check(record);
     const events = readSessionLogFile(path.join(runDir, 'session.jsonl')).events;
     const output = events.filter(event => event.type === 'block.output' && !event.data.port).at(-1)?.data.content ?? '';
-    if (outcome.status !== 'done') throw Object.assign(new Error(`Child ${phase} ${outcome.status}: ${outcome.error || 'interrupted'}`), { code: record.budgetHit ? 'goal_limit' : 'goal_child_failed' });
-    const result = { runId: pending.runId, output: String(output) };
+    if (outcome.status !== 'done') throw Object.assign(new Error(`Child ${phase} ${outcome.status}: ${outcome.error || 'interrupted'}`), { code: state.pricingPause ? 'campaign_pricing' : record.reserveHit ? 'campaign_reserve' : record.budgetHit ? 'goal_limit' : 'goal_child_failed' });
+    const result = { runId: pending.runId, output: String(output), ...(phase.startsWith('candidate-evaluation-') ? { runtime: workflowMeasurements(this.project(state.projectId).store, pending.runId) } : {}) };
     immutable(this.recordPath(state, `child-${phase}`), result);
     state.activeChild = null; this.save(state);
     return result;
@@ -601,14 +691,16 @@ export class GoalController {
     state.outputRecovery = { ...state.outputRecovery, exhausted: true }; this.save(state);
     return null;
   }
-  async measured(record, candidate, label, suite = record.state.benchmark, split = 'development') {
+  async measured(record, candidate, label, suite = record.state.benchmark, split = 'development', options = {}) {
     const file = this.recordPath(record.state, `measurement-${label}-${suite.version}-${split}`);
     if (fs.existsSync(file)) return read(file);
     this.putRecord(record.state, `candidate-${label}`, { candidate, digest: digest(candidate), model: record.state.contract.worker, evaluationDigest: digest(record.state.contract.evaluation) });
-    const measured = await evaluateCandidate(this, record, candidate, label, suite, split);
+    const measured = await evaluateCandidate(this, record, candidate, label, suite, split, options);
     const { reports, ...summary } = measured;
     if (split === 'development') summary.feedback = reports.slice(0, 12).map(report => ({ caseId: report.caseId, status: report.status,
-      checks: report.checks.filter(check => check.status !== 'pass').slice(0, 4).map(({ name, status, code, explanation }) => ({ name, status, code, explanation: explanation.slice(0, 180) })) }));
+      checks: report.checks.slice(0, 6).map(({ name, status, code, explanation }) => ({ name, status, code, explanation: explanation.slice(0, 300) })),
+      runtime: report.runtime ? { repairs: report.runtime.repairs, initial: report.runtime.initial ? { contractValid: report.runtime.initial.contractValid, text: report.runtime.initial.text?.slice(0, 300) } : null, latencyMs: report.runtime.latencyMs, tokens: report.runtime.tokens, knownUsd: report.runtime.knownUsd, transformations: JSON.stringify(report.runtime.transformations ?? []).slice(0, 500) } : null,
+      judgeEvidence: report.evaluations.filter(e => ['ai-rubric', 'reference'].includes(e.evaluator)).map(e => ({ name: e.name, evidence: JSON.stringify(e.evidence ?? {}).slice(0, 700) })) }));
     if ([record.state.contract.evaluation.ranking.primary, ...(record.state.contract.evaluation.ranking.tieBreakers ?? [])].some(key => summary.metrics[key]?.value == null)) { summary.comparable = false; summary.rankingReason = 'A configured ranking measurement is unavailable'; }
     return this.putRecord(record.state, `measurement-${label}-${suite.version}-${split}`, summary);
   }
@@ -709,6 +801,17 @@ export class GoalController {
     if (!state.setupDone) {
       const setup = await this.once(record, 'setup', state.definition.setup, state.contract.objective);
       state.setupDone = true; state.setupResult = { runId: setup.runId, summary: setup.output.slice(0, 2000) }; this.save(state);
+    }
+    if (state.contract.campaign) {
+      try { return await driveCampaign(this, record); }
+      catch (error) {
+        if (error.code === 'campaign_reserve' || record.reserveHit) {
+          this.putRecord(state, `campaign-abandoned-${state.iteration + 1}`, { activeChild: state.activeChild, activeTrials: state.activeTrials ?? {}, reason: 'Search reserve boundary', calls: state.calls });
+          state.activeTrials = {};
+          return resumeCampaignConfirmation(this, record);
+        }
+        throw error;
+      }
     }
     if (state.contract.evaluation) {
       if (state.contract.evaluation.referencePreparation && !state.referencesPrepared) {

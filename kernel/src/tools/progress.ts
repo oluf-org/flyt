@@ -25,6 +25,9 @@ interface Seen { count: number; failureCount: number; durableVersion: number; }
 export class ProgressDetector {
   private seen = new Map<string, Seen>();
   private durableVersion = 0;
+  private evidenceVersion = 0;
+  private novelReads = new Set<string>();
+  private readVersions = new Map<string, number>();
   constructor(
     readonly warnAfter = 3,
     readonly failWarnAfter = 2,
@@ -32,13 +35,27 @@ export class ProgressDetector {
     readonly failurePermissionAfter = 3,
   ) {}
 
-  durableProgress(): void { this.durableVersion += 1; }
+  durableProgress(): void {
+    this.durableVersion += 1;
+    this.novelReads.clear();
+    this.readVersions.clear();
+  }
 
-  record(call: ToolCall, failed: boolean, tokens: number): RepetitionEvidence {
+  record(call: ToolCall, failed: boolean, tokens: number, readOnly = false): RepetitionEvidence {
     const fingerprint = callFingerprint(call);
+    // A missing file retried after discovering new evidence is not a stalled
+    // run. Only novel successful reads advance this version: alternating old
+    // queries must still hit the bound, and writes keep their strict policy.
+    if (readOnly && !failed && !this.novelReads.has(fingerprint)) {
+      this.novelReads.add(fingerprint);
+      this.evidenceVersion += 1;
+    }
+    const newEvidence = readOnly && this.readVersions.has(fingerprint)
+      && this.readVersions.get(fingerprint) !== this.evidenceVersion;
+    if (readOnly) this.readVersions.set(fingerprint, this.evidenceVersion);
     const previous = this.seen.get(fingerprint) ?? { count: 0, failureCount: 0, durableVersion: this.durableVersion };
     const durableStateChanged = previous.durableVersion !== this.durableVersion;
-    const base = durableStateChanged ? { count: 0, failureCount: 0 } : previous;
+    const base = durableStateChanged || newEvidence ? { count: 0, failureCount: 0 } : previous;
     const next = {
       count: base.count + 1,
       failureCount: failed ? base.failureCount + 1 : 0,

@@ -32,6 +32,7 @@ export const BUILTIN = {
   uiExtensions: 'flyt:ui-extensions',
   blocks: 'flyt:blocks',
   blocksCore: 'flyt:blocks-core',
+  blocksDelivery: 'flyt:blocks-delivery',
   blocksTaskGraph: 'flyt:blocks-task-graph',
   blocksJudgement: 'flyt:blocks-judgement',
   blocksInquiry: 'flyt:blocks-inquiry',
@@ -60,6 +61,7 @@ const BUILTIN_METADATA: Record<string, BuiltinMetadata> = {
   [BUILTIN.uiExtensions]: { name: 'UI extensions', description: 'Validated, data-only UI extension declarations.', contributes: ['ui'] },
   [BUILTIN.blocks]: { name: 'Block registry', description: 'Canonical resolution for every stack block use.', contributes: ['blocks'] },
   [BUILTIN.blocksCore]: { name: 'Core blocks', description: 'Core work and transformation blocks.', contributes: ['blocks'] },
+  [BUILTIN.blocksDelivery]: { name: 'Delivery workflows', description: 'Evidence-bound changes, diagnosis, reviews, research, planning and milestone delivery.', contributes: ['blocks'] },
   [BUILTIN.blocksTaskGraph]: { name: 'Plan & dispatch', description: 'Agent-planned task graphs with bounded dependency scheduling.', contributes: ['blocks'] },
   [BUILTIN.blocksJudgement]: { name: 'Judgement blocks', description: 'Evaluation, comparison, refinement, and checkpoint blocks.', contributes: ['blocks'] },
   [BUILTIN.blocksInquiry]: { name: 'Inquiry blocks', description: 'Question and inquiry blocks.', contributes: ['blocks'] },
@@ -96,6 +98,7 @@ export async function builtinImporter(name: string): Promise<unknown> {
     case BUILTIN.uiExtensions: return import('./plugins/ui-extensions.js');
     case BUILTIN.blocks: return import('./plugins/blocks.js');
     case BUILTIN.blocksCore: return import('./plugins/blocks-core.js');
+    case BUILTIN.blocksDelivery: return import('./plugins/blocks-delivery.js');
     case BUILTIN.blocksTaskGraph: return import('./plugins/blocks-task-graph.js');
     case BUILTIN.blocksJudgement: return import('./plugins/blocks-judgement.js');
     case BUILTIN.blocksInquiry: return import('./plugins/blocks-inquiry.js');
@@ -116,6 +119,7 @@ const BLOCKS: Entry[] = [
   { id: 'interceptions', name: BUILTIN.interceptions },
   { id: 'blocks', name: BUILTIN.blocks },
   { id: 'blocks-core', name: BUILTIN.blocksCore },
+  { id: 'blocks-delivery', name: BUILTIN.blocksDelivery },
   { id: 'blocks-task-graph', name: BUILTIN.blocksTaskGraph },
   { id: 'blocks-judgement', name: BUILTIN.blocksJudgement },
   { id: 'blocks-inquiry', name: BUILTIN.blocksInquiry },

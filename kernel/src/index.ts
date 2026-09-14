@@ -54,6 +54,8 @@ export { createScreenedShell } from './plugins/shell-screened.js';
 export { scrubbedParentEnv, layeredEnv, isCredentialEnvName } from './sandbox/environment.js';
 export * as flytAdapters from './plugins/llm-adapters.js';
 export * as flytBlocksCore from './plugins/blocks-core.js';
+export * as flytBlocksDelivery from './plugins/blocks-delivery.js';
+export * from './workflows/contracts.js';
 export * as flytBlocksJudgement from './plugins/blocks-judgement.js';
 export * as flytBlocksInquiry from './plugins/blocks-inquiry.js';
 export * as flytBlocksLoop from './plugins/blocks-loop.js';

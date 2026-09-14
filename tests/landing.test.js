@@ -622,6 +622,23 @@ test('a gate this machine cannot run is caught before the work, not after it', (
   assert.deepEqual(unrunnableGates([]), []);
 });
 
+test('gate preflight handles quoted executable paths and rejects directories', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-gate-path-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, process.platform === 'win32' ? 'test runner.cmd' : 'test runner');
+  fs.writeFileSync(file, process.platform === 'win32' ? '@exit /b 0\r\n' : '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  assert.equal(gateProblem(`"${file}" --version`), null);
+  assert.match(gateProblem(`"${dir}" --version`), /not an executable/);
+});
+
+test('Windows Python execution aliases are not rejected merely because stat cannot follow them', { skip: process.platform !== 'win32' }, () => {
+  const file = path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WindowsApps', 'python.exe');
+  let stat;
+  try { stat = fs.lstatSync(file); } catch { return; }
+  if (!stat.isSymbolicLink()) return;
+  assert.equal(gateProblem(`"${file}" -m unittest`), null);
+});
+
 test('a configured reviewer keeps the key it was stamped with', async () => {
   // The worker the main process builds carries its provider's key. reviewDiff
   // used to spread `apiKey` unconditionally over it, so every caller that had

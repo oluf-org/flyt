@@ -245,6 +245,7 @@ export function createRunProjector(runId: string, { retainArtifacts = true } = {
 
       case 'run.stage':
         meta.stage = String(data.stage ?? meta.stage);
+        if (['execution', 'resumed'].includes(meta.stage)) meta.error = null;
         if ('currentBlockId' in data) meta.currentBlockId = data.currentBlockId ? String(data.currentBlockId) : null;
         if (data.error) meta.error = String(data.error);
         break;

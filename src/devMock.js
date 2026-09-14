@@ -1394,6 +1394,8 @@ export function installDevMock() {
     toolsFolder: async () => ({ dir: 'tools', packaged: false }),
     // No shell to open a file with in a browser; the link is still exercised.
     openRunArtifact: async (_pid, _runId, rel) => { console.info('[devMock] would open', rel); },
+    getRepoChanges: async () => ({ available: false, files: [] }),
+    openChangedFile: async (_pid, _runId, rel) => { console.info('[devMock] would open changed file', rel); },
 
     // --- The loop (DESIGN-SPEC.md §8) ---
     loopStatus: async () => structuredClone(mockLoop),

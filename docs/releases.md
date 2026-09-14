@@ -91,10 +91,10 @@ If Wrangler uploads the Worker but fails on `/zones/<zone-id>/workers/routes` wi
 ### Release candidate (`.github/workflows/release.yml`)
 
 1. Merge reviewed app changes and the version bump (package and lockfile) to main. Create/push the matching `vX.Y.Z` tag. Tagged commits must be ancestors of main.
-2. Existing Windows/macOS/Linux CI runners test, build and package the application. Windows sandbox checks remain in place.
-3. Each platform installs the locked uploader dependencies and uploads its immutable artifacts to R2. The three runners do not share mutable manifests.
-4. Only after all jobs succeed does the final job verify and activate the candidate for every beta platform.
-5. GitHub Releases are no longer created or published by this workflow. There is no automatic stable promotion.
+2. Existing Windows/macOS/Linux CI runners test, build and package the application. Windows sandbox checks remain in place. Verified installers are retained as Actions artifacts for 14 days on both tagged and manual runs.
+3. After every platform succeeds, an independent GitHub job collects the Windows x64, macOS Intel/ARM, and Linux x64 installers, manifests and blockmaps. It generates `SHA256SUMS.txt`, uploads into a draft release, verifies GitHub's asset sizes and SHA-256 digests, and publishes the complete release. Notes come from `docs/release-notes/<version>.md` when present. Reruns reuse identical files and refuse to replace existing bytes.
+4. Separate platform jobs install the locked uploader dependencies and upload the same immutable artifacts to R2. The three uploaders do not share mutable manifests. Only after every R2 upload succeeds does the final job verify and activate the candidate for every beta platform.
+5. GitHub publication and R2 publication are independent: a credential or activation failure cannot withhold verified GitHub downloads. An R2 failure still appears as a failed workflow job. There is no automatic stable-channel promotion; GitHub publication does not change the application's generic update feed or signing eligibility.
 
 A manual run on an untagged branch still produces short-lived Actions artifacts without uploading or changing channels. A manual tagged run follows the candidate path. Use a new tag containing the updated workflows: dispatching an old tag can execute its old workflow definition.
 

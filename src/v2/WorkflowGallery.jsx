@@ -18,6 +18,7 @@
 // somebody to duplicate it three times.
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { changedLabel, galleryRows } from './workflowGalleryModel.js';
+import { workflowRecommendation } from '../defaultWorkflows.js';
 import './workflowGalleryStyles.css';
 
 function Icon({ name, size = 16 }) {
@@ -156,7 +157,9 @@ export default function WorkflowGallery({
   const [query, setQuery] = useState('');
   const [dialog, setDialog] = useState(null);
   const rows = useMemo(() => galleryRows(stacks, query), [stacks, query]);
-  const launchable = rows.filter(row => row.launchable);
+  const recommended = rows.filter(row => row.launchable && workflowRecommendation(row.id) === 'recommended');
+  const legacy = rows.filter(row => row.launchable && workflowRecommendation(row.id) === 'legacy');
+  const launchable = rows.filter(row => row.launchable && workflowRecommendation(row.id) === 'custom');
   const internal = rows.filter(row => !row.launchable);
 
   const create = async input => {
@@ -185,9 +188,8 @@ export default function WorkflowGallery({
           <p className="wg-eyebrow">Build</p>
           <h1>Workflows</h1>
           <p className="wg-lede">
-            One workflow is one graph of steps. Modes are named settings over that graph —
-            the same steps, run harder or lighter — so a change of shape is a new workflow
-            and a change of effort is a mode.
+            Choose the result you need. Start with a shipping workflow, then duplicate
+            it to adapt its steps and settings to your project.
           </p>
         </div>
         <div className="wg-head-acts">
@@ -220,7 +222,9 @@ export default function WorkflowGallery({
         <p className="wg-none">Nothing matches “{query}”.</p>
       ) : (
         <div className="wg-body">
-          {section('Launchable', 'Offered in chat. Pick one, pick its mode, and run.', launchable)}
+          {section('Recommended', 'Focused workflows with clear outputs and bounded execution.', recommended)}
+          {section('Your workflows', 'Project workflows and customized compositions.', launchable)}
+          {section('Earlier workflows', 'Preserved for existing projects. New defaults are recommended above.', legacy)}
           {section('Internal', 'Not offered in chat — pieces other workflows and the Loop use.', internal)}
         </div>
       )}

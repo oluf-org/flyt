@@ -1,0 +1,408 @@
+{
+  "kind": "controlled scheduler benchmark; no real model calls",
+  "baselineCommit": "a0b4b57a6705a5fa62de145483a46c0d0b8fd130",
+  "delaysMs": {
+    "slow": 500,
+    "fast": 50,
+    "dependent": 180,
+    "queued": 180
+  },
+  "maxParallel": 2,
+  "beforeMeanMs": 766.13805,
+  "afterMeanMs": 553.73705,
+  "reductionPercent": 27.723593678711044,
+  "samples": [
+    {
+      "label": "before",
+      "sample": 0,
+      "durationMs": 792.3131000000001,
+      "peak": 2,
+      "timeline": [
+        {
+          "task": "slow",
+          "event": "start",
+          "ms": 49.514999999999986
+        },
+        {
+          "task": "fast",
+          "event": "start",
+          "ms": 49.57820000000004
+        },
+        {
+          "task": "fast",
+          "event": "end",
+          "ms": 101.38060000000007
+        },
+        {
+          "task": "slow",
+          "event": "end",
+          "ms": 560.4748
+        },
+        {
+          "task": "dependent",
+          "event": "start",
+          "ms": 589.4825000000001
+        },
+        {
+          "task": "queued",
+          "event": "start",
+          "ms": 589.5584000000001
+        },
+        {
+          "task": "dependent",
+          "event": "end",
+          "ms": 777.0636999999999
+        },
+        {
+          "task": "queued",
+          "event": "end",
+          "ms": 787.0578
+        }
+      ],
+      "output": "Controlled uneven workloads\n\n## SLOW (slow)\nslow done\n\n## FAST (fast)\nfast done\n\n## DEPENDENT (dependent)\ndependent done\n\n## QUEUED (queued)\nqueued done"
+    },
+    {
+      "label": "after",
+      "sample": 0,
+      "durationMs": 557.2605999999998,
+      "peak": 2,
+      "timeline": [
+        {
+          "task": "slow",
+          "event": "start",
+          "ms": 39.43399999999997
+        },
+        {
+          "task": "fast",
+          "event": "start",
+          "ms": 39.496799999999894
+        },
+        {
+          "task": "fast",
+          "event": "end",
+          "ms": 99.68539999999985
+        },
+        {
+          "task": "dependent",
+          "event": "start",
+          "ms": 118.82579999999984
+        },
+        {
+          "task": "dependent",
+          "event": "end",
+          "ms": 302.6428999999998
+        },
+        {
+          "task": "queued",
+          "event": "start",
+          "ms": 314.7425999999998
+        },
+        {
+          "task": "queued",
+          "event": "end",
+          "ms": 505.9979999999998
+        },
+        {
+          "task": "slow",
+          "event": "end",
+          "ms": 552.3336999999999
+        }
+      ],
+      "output": "Controlled uneven workloads\n\n## SLOW (slow)\nslow done\n\n## FAST (fast)\nfast done\n\n## DEPENDENT (dependent)\ndependent done\n\n## QUEUED (queued)\nqueued done"
+    },
+    {
+      "label": "after",
+      "sample": 1,
+      "durationMs": 543.7875000000001,
+      "peak": 2,
+      "timeline": [
+        {
+          "task": "slow",
+          "event": "start",
+          "ms": 28.70750000000021
+        },
+        {
+          "task": "fast",
+          "event": "start",
+          "ms": 28.76559999999995
+        },
+        {
+          "task": "fast",
+          "event": "end",
+          "ms": 83.64950000000022
+        },
+        {
+          "task": "dependent",
+          "event": "start",
+          "ms": 97.9847000000002
+        },
+        {
+          "task": "dependent",
+          "event": "end",
+          "ms": 288.9716000000001
+        },
+        {
+          "task": "queued",
+          "event": "start",
+          "ms": 305.1632000000002
+        },
+        {
+          "task": "queued",
+          "event": "end",
+          "ms": 491.95720000000006
+        },
+        {
+          "task": "slow",
+          "event": "end",
+          "ms": 538.0892999999999
+        }
+      ],
+      "output": "Controlled uneven workloads\n\n## SLOW (slow)\nslow done\n\n## FAST (fast)\nfast done\n\n## DEPENDENT (dependent)\ndependent done\n\n## QUEUED (queued)\nqueued done"
+    },
+    {
+      "label": "before",
+      "sample": 1,
+      "durationMs": 754.0545999999999,
+      "peak": 2,
+      "timeline": [
+        {
+          "task": "slow",
+          "event": "start",
+          "ms": 29.841100000000097
+        },
+        {
+          "task": "fast",
+          "event": "start",
+          "ms": 29.889500000000226
+        },
+        {
+          "task": "fast",
+          "event": "end",
+          "ms": 82.55610000000024
+        },
+        {
+          "task": "slow",
+          "event": "end",
+          "ms": 538.1318000000001
+        },
+        {
+          "task": "dependent",
+          "event": "start",
+          "ms": 562.2397999999998
+        },
+        {
+          "task": "queued",
+          "event": "start",
+          "ms": 562.3387000000002
+        },
+        {
+          "task": "dependent",
+          "event": "end",
+          "ms": 743.4043999999999
+        },
+        {
+          "task": "queued",
+          "event": "end",
+          "ms": 749.1615000000002
+        }
+      ],
+      "output": "Controlled uneven workloads\n\n## SLOW (slow)\nslow done\n\n## FAST (fast)\nfast done\n\n## DEPENDENT (dependent)\ndependent done\n\n## QUEUED (queued)\nqueued done"
+    },
+    {
+      "label": "before",
+      "sample": 2,
+      "durationMs": 767.6257,
+      "peak": 2,
+      "timeline": [
+        {
+          "task": "slow",
+          "event": "start",
+          "ms": 34.525199999999586
+        },
+        {
+          "task": "fast",
+          "event": "start",
+          "ms": 34.59019999999964
+        },
+        {
+          "task": "fast",
+          "event": "end",
+          "ms": 94.37419999999975
+        },
+        {
+          "task": "slow",
+          "event": "end",
+          "ms": 546.7903999999999
+        },
+        {
+          "task": "dependent",
+          "event": "start",
+          "ms": 570.0690999999997
+        },
+        {
+          "task": "queued",
+          "event": "start",
+          "ms": 570.1434999999997
+        },
+        {
+          "task": "dependent",
+          "event": "end",
+          "ms": 752.4946999999997
+        },
+        {
+          "task": "queued",
+          "event": "end",
+          "ms": 760.7521999999994
+        }
+      ],
+      "output": "Controlled uneven workloads\n\n## SLOW (slow)\nslow done\n\n## FAST (fast)\nfast done\n\n## DEPENDENT (dependent)\ndependent done\n\n## QUEUED (queued)\nqueued done"
+    },
+    {
+      "label": "after",
+      "sample": 2,
+      "durationMs": 574.7331999999997,
+      "peak": 2,
+      "timeline": [
+        {
+          "task": "slow",
+          "event": "start",
+          "ms": 63.007300000000214
+        },
+        {
+          "task": "fast",
+          "event": "start",
+          "ms": 63.0622000000003
+        },
+        {
+          "task": "fast",
+          "event": "end",
+          "ms": 116.98229999999967
+        },
+        {
+          "task": "dependent",
+          "event": "start",
+          "ms": 133.0661
+        },
+        {
+          "task": "dependent",
+          "event": "end",
+          "ms": 318.3071
+        },
+        {
+          "task": "queued",
+          "event": "start",
+          "ms": 333.7312000000002
+        },
+        {
+          "task": "queued",
+          "event": "end",
+          "ms": 523.1225999999997
+        },
+        {
+          "task": "slow",
+          "event": "end",
+          "ms": 569.8047999999999
+        }
+      ],
+      "output": "Controlled uneven workloads\n\n## SLOW (slow)\nslow done\n\n## FAST (fast)\nfast done\n\n## DEPENDENT (dependent)\ndependent done\n\n## QUEUED (queued)\nqueued done"
+    },
+    {
+      "label": "after",
+      "sample": 3,
+      "durationMs": 539.1669000000002,
+      "peak": 2,
+      "timeline": [
+        {
+          "task": "slow",
+          "event": "start",
+          "ms": 31.316800000000512
+        },
+        {
+          "task": "fast",
+          "event": "start",
+          "ms": 31.374800000000505
+        },
+        {
+          "task": "fast",
+          "event": "end",
+          "ms": 96.16629999999986
+        },
+        {
+          "task": "dependent",
+          "event": "start",
+          "ms": 113.05299999999988
+        },
+        {
+          "task": "dependent",
+          "event": "end",
+          "ms": 299.6918000000005
+        },
+        {
+          "task": "queued",
+          "event": "start",
+          "ms": 317.1770000000006
+        },
+        {
+          "task": "queued",
+          "event": "end",
+          "ms": 502.02289999999994
+        },
+        {
+          "task": "slow",
+          "event": "end",
+          "ms": 533.4072999999999
+        }
+      ],
+      "output": "Controlled uneven workloads\n\n## SLOW (slow)\nslow done\n\n## FAST (fast)\nfast done\n\n## DEPENDENT (dependent)\ndependent done\n\n## QUEUED (queued)\nqueued done"
+    },
+    {
+      "label": "before",
+      "sample": 3,
+      "durationMs": 750.5587999999998,
+      "peak": 2,
+      "timeline": [
+        {
+          "task": "slow",
+          "event": "start",
+          "ms": 31.670000000000073
+        },
+        {
+          "task": "fast",
+          "event": "start",
+          "ms": 31.726700000000164
+        },
+        {
+          "task": "fast",
+          "event": "end",
+          "ms": 93.53589999999986
+        },
+        {
+          "task": "slow",
+          "event": "end",
+          "ms": 531.2479000000003
+        },
+        {
+          "task": "dependent",
+          "event": "start",
+          "ms": 551.6282000000001
+        },
+        {
+          "task": "queued",
+          "event": "start",
+          "ms": 551.6787000000004
+        },
+        {
+          "task": "dependent",
+          "event": "end",
+          "ms": 735.6731
+        },
+        {
+          "task": "queued",
+          "event": "end",
+          "ms": 743.6212000000005
+        }
+      ],
+      "output": "Controlled uneven workloads\n\n## SLOW (slow)\nslow done\n\n## FAST (fast)\nfast done\n\n## DEPENDENT (dependent)\ndependent done\n\n## QUEUED (queued)\nqueued done"
+    }
+  ]
+}

@@ -7,5 +7,5 @@ blocks:
     title: Build / improve candidate
     config:
       systemPrompt: "You build the next candidate for a persistent Goal. Follow its fixed contract and CURRENT iteration number. Return exactly ONE JSON object with candidate.text and optional findings/proposal for this iteration only. Never emit multiple objects or simulate future iterations. Execute the requested task; do not summarize the Goal packet or continue the preceding prose."
-      instructions: "Work toward the fixed Goal criteria. Read the Goal memory and improve the best candidate. Return the JSON output contract from the Goal context, with candidate.text containing the complete result."
+      instructions: "Work toward the fixed Goal criteria. Read the Goal memory and complete parent artifacts through goal_history. When campaign is present, explore its assigned family and return experiment with parents, family, editType, hypothesis predicting the effect, and informedBy lesson IDs. Intentional repeats require a repetition kind and reason. Return the JSON output contract from the Goal context, with candidate.text containing the complete result."
 `;

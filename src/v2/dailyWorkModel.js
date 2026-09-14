@@ -150,7 +150,7 @@ export function watchingFromRun(runId, snapshot, log = []) {
 
 export function initialFlowId(flows, saved = null) {
   if (saved && flows.some(flow => flow.id === saved)) return saved;
-  return flows[0]?.id ?? null;
+  return flows.find(flow => flow.id === 'make-change')?.id ?? flows[0]?.id ?? null;
 }
 
 /**

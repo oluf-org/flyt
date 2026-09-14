@@ -1,5 +1,7 @@
 # Goal authoring chat
 
+For sustained optimization, configure **Search and completion** in the Goal workspace. See [Goal campaigns](goal-campaigns.md) for baseline selection, candidate families, durable learning, staged evaluation and confirmation reserves.
+
 ## Reusing goals and loops between projects
 
 Open **Loop library** from Goals to search saved definitions across all projects.

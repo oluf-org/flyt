@@ -3,7 +3,7 @@
  *
  * The saved workflow contains one `task-graph` block.  Its planning turn emits a
  * small, validated DAG; the block then exposes every generated task as a child in
- * the session log and drains ready tasks in bounded waves.  Generated children
+ * the session log and fills available worker slots as tasks finish. Generated children
  * are run records, not edits to the authored stack: rerunning a workflow may
  * legitimately produce a different plan without rewriting Build behind the user.
  */
@@ -219,6 +219,7 @@ export function parseTaskGraphPlan(
     for (const input of task.requires) {
       const producer = producers.get(input);
       if (!producer) errors.push(`${task.id} requires "${input}", but no task produces it`);
+      else if (producer === task.id) errors.push(`${task.id} cannot require its own output "${input}"; supplied facts belong in the task goal`);
       else if (producer !== task.id && !task.dependsOn.includes(producer)) task.dependsOn.push(producer);
     }
     for (const input of task.optional) {
@@ -289,9 +290,11 @@ function plannerSystem(parallelism: ParallelismLevel, minTasks: number, maxTasks
     POLICY[parallelism],
     `Create between ${minTasks} and ${maxTasks} tasks through the configured structured response channel.`,
     'produces/requires/optional are named artifacts or facts, not filenames. writeFiles contains every file the task expects to modify.',
+    'requires contains only named outputs produced by another task in this graph; match their produces names exactly. Facts already supplied in the brief and existing workspace evidence belong in goal text, not requires. Independent roots use dependsOn:[] and requires:[].',
     'Use the fewest tasks that keep each worker\'s job bounded. One worker can read, decide and produce one deliverable in a single sitting; a request one worker can finish is one task.',
     'Every dependent task costs a full additional agent run and loses the context its predecessor built, so do not split one deliverable into inventory, classification, synthesis and verification stages. Split only where parts are genuinely independent and can run at the same time, or where a consolidation step truly needs several finished inputs.',
     'Keep each task independently verifiable. Do not create empty coordination-only tasks or separate verification tasks for work a worker can check itself.',
+    'Carry the relevant source facts, required outputs and user-requested verification into each task goal, including any arithmetic checks or uncertainty limits.',
     'Every worker can inspect the bound workspace. Do not create a broad repository-inventory or exploration task for other workers; give each worker a focused deliverable and let it perform its own targeted reads.',
     'Do not embed JSON in prose. Submit the graph through the native schema response or submit_task_graph tool when offered.',
   ].join('\n');
@@ -810,7 +813,12 @@ export async function executeTaskGraph(run: BlockRun, options: { plannerOnly?: b
             maxInputTokens: integer(run.config.workerMaxInputTokens, profile?.context.maxInputTokens ?? 96_000, 1_024, 1_000_000),
             modelRetryAttempts: 1,
             isolated: profile?.context.mode !== 'shared',
-            instructions: `Work only on this generated task. Respect its expected write scope.\n${str(run.config.workerInstructions)}`.trim(),
+            instructions: [
+              'Work only on this generated task. Respect its expected write scope.',
+              'Match the explanation length to the task. Give each result and its supporting evidence once; omit repeated scope and tool-use disclaimers.',
+              'A named output can be text in your answer. Write a file only when the task asks for one; an unrequested file write is not missing verification.',
+              str(run.config.workerInstructions),
+            ].filter(Boolean).join('\n'),
           },
         });
         } catch (error) {
@@ -877,38 +885,53 @@ export async function executeTaskGraph(run: BlockRun, options: { plannerOnly?: b
       return { task, outcome };
   };
 
-  while (completed.size + failed.size + blocked.size < plan.tasks.length) {
-    if (run.signal?.aborted) return {
-      status: 'failed', output: '', error: 'Stopped before the next task wave began.',
-      failure: { code: 'cancelled', source: 'user', retryable: false, userInitiated: true,
-        visibleOutputProduced: false, durableWriteProduced: false },
-    };
-    let newlyBlocked = 0;
-    for (const task of plan.tasks) {
-      if (completed.has(task.id) || failed.has(task.id) || blocked.has(task.id)) continue;
-      const blockedBy = task.dependsOn.filter(dep => failed.has(dep) || blocked.has(dep));
-      if (!blockedBy.length) continue;
-      blocked.set(task.id, blockedBy); newlyBlocked += 1;
-      await session.append({ type: 'block.status', data: {
-        blockId: `${run.blockId}.${task.id}`, parentId: run.blockId, taskId: task.id, title: task.title,
-        use: 'flyt-blocks-core:work', status: 'blocked', dependsOn: task.dependsOn, blockedBy,
-        attempt: attemptsByTask.get(task.id) ?? 0, maxAttempts: maxTaskAttempts,
-        retryState: 'blocked_by_dependency',
-        failure: { code: 'dependency_failed', source: 'scheduler', retryable: false, userInitiated: false,
-          visibleOutputProduced: false, durableWriteProduced: false } as unknown as JsonValue,
-      } });
-    }
-    const ready = plan.tasks.filter(task => !completed.has(task.id) && !failed.has(task.id) && !blocked.has(task.id)
-      && task.dependsOn.every(dep => completed.has(dep))).slice(0, maxParallel);
-    if (!ready.length) {
-      if (newlyBlocked) continue;
-      return { status: 'failed', output: '', error: 'The generated task graph has no ready task; its dependencies cannot be satisfied.' };
-    }
-    const outcomes = await Promise.all(ready.map(runTask));
-    for (const item of outcomes) {
+  type TaskSettlement = { task: GeneratedTask; outcome: BlockOutcome } | { task: GeneratedTask; error: unknown };
+  const inFlight = new Map<string, Promise<TaskSettlement>>();
+  try {
+    while (completed.size + failed.size + blocked.size < plan.tasks.length) {
+      if (run.signal?.aborted) return {
+        status: 'failed', output: '', error: 'Stopped before dispatching another task.',
+        failure: { code: 'cancelled', source: 'user', retryable: false, userInitiated: true,
+          visibleOutputProduced: false, durableWriteProduced: false },
+      };
+      let newlyBlocked = 0;
+      for (const task of plan.tasks) {
+        if (completed.has(task.id) || failed.has(task.id) || blocked.has(task.id) || inFlight.has(task.id)) continue;
+        const blockedBy = task.dependsOn.filter(dep => failed.has(dep) || blocked.has(dep));
+        if (!blockedBy.length) continue;
+        blocked.set(task.id, blockedBy); newlyBlocked += 1;
+        await session.append({ type: 'block.status', data: {
+          blockId: `${run.blockId}.${task.id}`, parentId: run.blockId, taskId: task.id, title: task.title,
+          use: 'flyt-blocks-core:work', status: 'blocked', dependsOn: task.dependsOn, blockedBy,
+          attempt: attemptsByTask.get(task.id) ?? 0, maxAttempts: maxTaskAttempts,
+          retryState: 'blocked_by_dependency',
+          failure: { code: 'dependency_failed', source: 'scheduler', retryable: false, userInitiated: false,
+            visibleOutputProduced: false, durableWriteProduced: false } as unknown as JsonValue,
+        } });
+      }
+      const ready = plan.tasks.filter(task => !completed.has(task.id) && !failed.has(task.id) && !blocked.has(task.id)
+        && !inFlight.has(task.id) && task.dependsOn.every(dep => completed.has(dep))).slice(0, maxParallel - inFlight.size);
+      for (const task of ready) {
+        if (run.signal?.aborted) break;
+        // Observe rejections immediately, including when another worker settles
+        // first. Unexpected infrastructure errors still propagate after draining.
+        inFlight.set(task.id, runTask(task).then(value => value, error => ({ task, error })));
+      }
+      if (!inFlight.size) {
+        if (run.signal?.aborted) continue;
+        if (newlyBlocked) continue;
+        return { status: 'failed', output: '', error: 'The generated task graph has no ready task; its dependencies cannot be satisfied.' };
+      }
+      const item = await Promise.race(inFlight.values());
+      inFlight.delete(item.task.id);
+      if ('error' in item) throw item.error;
       if (item.outcome.status === 'done') completed.set(item.task.id, item.outcome);
       else failed.set(item.task.id, item.outcome);
     }
+  } finally {
+    // Keep ownership until every started child settles, including cancellation
+    // and session errors. No sibling work is left writing after this block exits.
+    await Promise.allSettled(inFlight.values());
   }
 
   if (failed.size || blocked.size) {
@@ -916,7 +939,7 @@ export async function executeTaskGraph(run: BlockRun, options: { plannerOnly?: b
     const blockedItems = plan.tasks.filter(task => blocked.has(task.id));
     return {
       status: 'failed',
-      output: [...failed.values()].map(item => item.output).filter(Boolean).join('\n\n'),
+      output: failedItems.map(task => failed.get(task.id)?.output).filter(Boolean).join('\n\n'),
       error: [
         failedItems.length ? `${failedItems.length} generated task${failedItems.length === 1 ? '' : 's'} failed: ${failedItems.map(task => `"${task.title}": ${failed.get(task.id)?.error ?? 'unknown error'}`).join('; ')}` : '',
         blockedItems.length ? `${blockedItems.length} dependent task${blockedItems.length === 1 ? '' : 's'} blocked: ${blockedItems.map(task => `"${task.title}" by ${blocked.get(task.id)?.join(', ')}`).join('; ')}` : '',
@@ -967,7 +990,7 @@ export const TASK_GRAPH_SETTINGS = {
 export const taskGraphBlock: BlockDefinition = {
   use: 'flyt-blocks-core:task-graph',
   title: 'Plan & dispatch',
-  description: 'Have an agent create a validated task graph, then run ready tasks in bounded parallel waves.',
+  description: 'Have an agent create a validated task graph, then run ready tasks as worker slots become available.',
   category: 'work',
   settings: TASK_GRAPH_SETTINGS as unknown as JsonValue,
   ceiling: LOOP_CEILING,

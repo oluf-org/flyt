@@ -243,6 +243,7 @@ test('Plan & dispatch runs independent generated children together and records t
     const plannerPrompt = llm.seen[0].messages.find(message => message.role === 'system')?.content;
     assert.match(plannerPrompt, /ROLE: task-graph-planner/);
     assert.match(plannerPrompt, /Do not create a broad repository-inventory/);
+    assert.match(plannerPrompt, /Facts already supplied in the brief and existing workspace evidence belong in goal text, not requires/);
     assert.match(plannerPrompt, /WORKFLOW-SPECIFIC PLANNING GUIDANCE:\nCUSTOM PLANNER FOR THIS WORKFLOW/);
     assert.ok(llm.seen.slice(1).every(request => request.messages.find(message => message.role === 'system')?.content
       .startsWith('CUSTOM GENERATED WORKER FOR THIS WORKFLOW')),
@@ -274,6 +275,103 @@ test('Plan & dispatch runs independent generated children together and records t
     assert.equal(displayed.children[0].generated[0].taskId, 'alpha');
   } finally {
     await kernel.dispose();
+  }
+});
+
+test('Plan & dispatch refills free slots and starts dependants without waiting for unrelated work', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-graph-slots-'));
+  const kernel = createKernel();
+  const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+  const slow = deferred(), dependent = deferred(), dependentStarted = deferred(), queuedStarted = deferred();
+  const started = [], finished = [];
+  let active = 0, peak = 0;
+  const plan = contract([
+    task('slow'), task('fast', { produces: ['fast-result'] }),
+    task('dependent', { dependsOn: ['fast'], requires: ['fast-result'] }), task('queued'),
+  ]);
+  await kernel.ctx.plugin(flytTools);
+  await kernel.ctx.plugin(sessionJsonl, { root });
+  await kernel.ctx.plugin({ name: 'slot-model', apply(ctx) { return provideSeam(ctx, 'llm', {
+    stream(request) {
+      const prompt = request.messages.filter(m => m.role === 'user').map(m => m.content).join('\n');
+      const id = /# Task: (SLOW|FAST|DEPENDENT|QUEUED)\b/.exec(prompt)?.[1]?.toLowerCase();
+      if (id) { started.push(id); active++; peak = Math.max(peak, active); }
+      return { async *[Symbol.asyncIterator]() {}, async settled() {
+        if (id === 'slow') await slow.promise;
+        if (id === 'dependent') { dependentStarted.resolve(prompt); await dependent.promise; }
+        if (id === 'queued') queuedStarted.resolve();
+        if (id) { active--; finished.push(id); }
+        return { content: id ? `${id}-result verified` : plan, finishReason: 'stop' };
+      } };
+    }, async models() { return []; },
+  }); } });
+  const running = executeTaskGraph({ ctx: kernel.ctx, runId: 'slots', blockId: 'dispatch',
+    input: 'Read only.', ceiling: [], config: { model: 'fake', parallelism: 'high', maxParallel: 2 } });
+  const within = async promise => {
+    let timer;
+    try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Free worker slot was held by unrelated work')), 1500); })]); }
+    finally { clearTimeout(timer); }
+  };
+  try {
+    const prompt = await within(dependentStarted.promise);
+    assert.deepEqual(started, ['slow', 'fast', 'dependent']);
+    assert.deepEqual(finished, ['fast']);
+    assert.match(prompt, /fast-result verified/, 'completed prerequisite output reaches the dependent');
+    dependent.resolve();
+    await within(queuedStarted.promise);
+    assert.equal(finished.includes('slow'), false, 'queued independent work also uses the free slot');
+    slow.resolve();
+    const result = await running;
+    assert.equal(result.status, 'done', result.error);
+    assert.equal(peak, 2, 'refilling respects the fixed concurrency bound');
+    assert.equal(started.length, 4, 'each task runs once');
+    assert.ok(result.output.indexOf('SLOW') < result.output.indexOf('FAST'), 'aggregation retains authored order');
+  } finally {
+    slow.resolve(); dependent.resolve(); await running;
+    await kernel.dispose(); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Plan & dispatch cancellation drains active children without starting queued tasks', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'flyt-graph-stop-'));
+  const kernel = createKernel();
+  const controller = new AbortController();
+  const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
+  const first = deferred(), second = deferred(), bothStarted = deferred();
+  const started = [];
+  let active = 0, settled = false;
+  await kernel.ctx.plugin(flytTools);
+  await kernel.ctx.plugin(sessionJsonl, { root });
+  await kernel.ctx.plugin({ name: 'cancel-slot-model', apply(ctx) { return provideSeam(ctx, 'llm', {
+    stream(request) {
+      const prompt = request.messages.filter(m => m.role === 'user').map(m => m.content).join('\n');
+      const id = /# Task: (FIRST|SECOND|QUEUED)\b/.exec(prompt)?.[1]?.toLowerCase();
+      if (id) { started.push(id); active++; if (started.length === 2) bothStarted.resolve(); }
+      return { async *[Symbol.asyncIterator]() {}, async settled() {
+        if (id === 'first') await first.promise;
+        if (id === 'second') await second.promise;
+        if (id) active--;
+        return { content: id ? `${id} done` : contract([task('first'), task('second'), task('queued')]), finishReason: 'stop' };
+      } };
+    }, async models() { return []; },
+  }); } });
+  const running = executeTaskGraph({ ctx: kernel.ctx, runId: 'cancel', blockId: 'dispatch', input: 'Read only.',
+    signal: controller.signal, ceiling: [], config: { model: 'fake', maxParallel: 2 } }).finally(() => { settled = true; });
+  try {
+    await bothStarted.promise;
+    controller.abort(); first.resolve();
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.equal(settled, false, 'the block retains ownership while a started child still runs');
+    assert.deepEqual(started, ['first', 'second']);
+    second.resolve();
+    const result = await running;
+    assert.equal(result.status, 'failed');
+    assert.equal(result.failure.code, 'cancelled');
+    assert.equal(active, 0);
+    assert.deepEqual(started, ['first', 'second'], 'cancellation never launches queued work');
+  } finally {
+    first.resolve(); second.resolve(); await running;
+    await kernel.dispose(); fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

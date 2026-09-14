@@ -10,17 +10,17 @@ const ajv = new Ajv({ strict: false, allErrors: true, validateFormats: false });
 const string = { type: 'string', minLength: 1, maxLength: 8000 };
 const identifier = { type: 'string', pattern: '^[a-zA-Z0-9_-]{1,80}$' };
 const object = (properties, required = []) => ({ type: 'object', additionalProperties: false, properties, required });
-const artifact = object({ text: { type: 'string', maxLength: 24000 }, provenance: { type: 'object' }, limitations: { type: 'string', maxLength: 2000 }, reviewed: { type: 'boolean' } }, ['text']);
+const artifact = object({ text: { type: 'string', maxLength: 24000 }, source: { type: ['string', 'null'], maxLength: 64000 }, provenance: { type: 'object' }, limitations: { type: 'string', maxLength: 2000 }, reviewed: { type: 'boolean' } }, ['text']);
 export const SUITE_SCHEMA = object({
   id: identifier, version: { type: 'integer', minimum: 1 }, name: string,
   evaluators: { type: 'array', minItems: 1, maxItems: 30, items: { type: 'object' } },
-  cases: { type: 'array', minItems: 1, maxItems: 30, items: object({ id: identifier, input: string, requirements: { type: 'string', maxLength: 8000 }, split: { enum: ['development', 'held-out'] }, repeats: { type: 'integer', minimum: 1, maximum: 20 }, tags: { type: 'array', items: string, maxItems: 10 }, references: { type: 'array', items: artifact, maxItems: 5 },
+  cases: { type: 'array', minItems: 1, maxItems: 30, items: object({ id: identifier, input: string, requirements: { type: 'string', maxLength: 8000 }, split: { enum: ['development', 'validation', 'held-out'] }, repeats: { type: 'integer', minimum: 1, maximum: 20 }, tags: { type: 'array', items: string, maxItems: 10 }, references: { type: 'array', items: artifact, maxItems: 5 },
     evaluators: { type: 'array', items: { type: 'object' }, maxItems: 30 }, fixtures: { type: 'array', maxItems: 10, items: object({ path: string, text: { type: 'string', maxLength: 16000 } }, ['path', 'text']) },
   }, ['id', 'input', 'split', 'repeats']) },
 }, ['id', 'version', 'name', 'evaluators', 'cases']);
 export const EVALUATION_SCHEMA = object({
   version: { const: 1 }, suite: SUITE_SCHEMA, target: { enum: ['artifact', 'plan', 'task-graph', 'workflow'] }, targetConfig: object({ minTasks: { type: 'integer', minimum: 1, maximum: 24 }, maxTasks: { type: 'integer', minimum: 1, maximum: 24 }, parallelism: { enum: ['low', 'medium', 'high'] }, maxTokens: { type: 'integer', minimum: 1, maximum: 131072 }, maxOutputWords: { type: 'integer', minimum: 1, maximum: 100000 } }),
-  baseline: artifact, ranking: object({ primary: string, tieBreakers: { type: 'array', maxItems: 5, items: string }, minImprovement: { type: 'number', minimum: 0 } }, ['primary']),
+  baseline: artifact, ranking: object({ primary: string, tieBreakers: { type: 'array', maxItems: 5, items: string }, minImprovement: { type: 'number', minimum: 0 }, tolerances: { type: 'object', additionalProperties: { type: 'number', minimum: 0 } } }, ['primary']),
   targetThreshold: object({ metric: string, value: { type: 'number' }, direction: { enum: ['higher', 'lower'] } }, ['metric', 'value', 'direction']),
   finalVerification: object({ required: { type: 'boolean' } }, ['required']),
   referencePreparation: object({ fromSetup: { const: true } }, ['fromSetup']),
@@ -45,10 +45,11 @@ export function validateEvaluation(config) {
   validateSuite(config.suite);
   const names = new Set(['gateRate']);
   for (const e of [...config.suite.evaluators, ...config.suite.cases.flatMap(c => c.evaluators ?? [])]) {
-    const fields = e.id === 'runtime' ? ['latencyMs', 'tokens', 'knownUsd', 'repairs', 'fallbacks', 'unresolved'] : e.id === 'ai-rubric' ? e.config.dimensions.map(d => d.id) : e.id === 'block-contract' ? ['rawFormat'] : e.id === 'command' && e.config.metricSchema ? ['measured'] : [];
+    const fields = e.id === 'runtime' ? ['latencyMs', 'planningMs', 'readyDelayMs', 'peakWorkers', 'modelCalls', 'tokens', 'knownUsd', 'repairs', 'fallbacks', 'unresolved'] : e.id === 'ai-rubric' ? e.config.dimensions.map(d => d.id) : e.id === 'block-contract' ? ['rawFormat'] : e.id === 'command' && e.config.metricSchema ? ['measured'] : [];
     for (const field of fields) names.add(`${e.name}.${field}`);
   }
   if ([config.ranking.primary, ...(config.ranking.tieBreakers ?? []), ...(config.targetThreshold ? [config.targetThreshold.metric] : [])].some(name => !names.has(name))) throw new Error('Ranking and target must name a configured metric');
+  if (Object.keys(config.ranking.tolerances ?? {}).some(name => ![config.ranking.primary, ...(config.ranking.tieBreakers ?? [])].includes(name))) throw new Error('Tolerances must name ranking metrics');
   if (config.finalVerification.required && !config.suite.cases.some(c => c.split === 'held-out')) throw new Error('Final verification requires a held-out split');
   if (config.promotion.mode !== 'off') {
     if (!config.baseline || (!config.referencePreparation && !config.suite.cases.every(c => c.references?.length))) throw new Error('Promotion requires a fixed baseline and reference for every case, or explicit setup preparation');
@@ -106,14 +107,16 @@ export function aggregate(reports, scheduled = reports.length) {
 }
 export const evaluationRecipe = config => serializeStack({ id: 'runtime-evaluation', name: 'Runtime-owned evaluation', root: { kind: 'sequence', id: 'root', children: [{ kind: 'block', id: 'verify', use: 'flyt-blocks-judgement:robust-evaluation', config }] } });
 
-export async function evaluateCandidate(controller, record, candidate, label, suite, split = 'development') {
+export async function evaluateCandidate(controller, record, candidate, label, suite, split = 'development', options = {}) {
   const { state } = record, policy = state.contract.evaluation;
-  const cases = suite.cases.filter(c => c.split === split), reports = [], reportIds = [];
+  const cases = suite.cases.filter(c => c.split === split && (!options.caseIds || options.caseIds.includes(c.id))), reports = [], reportIds = [];
   const version = `${suite.id}@${suite.version}:${digest(suite).slice(0, 16)}`;
-  for (const item of cases) for (let repeat = 0; repeat < item.repeats; repeat++) {
+  const jobs = cases.flatMap(item => Array.from({ length: options.repeats ?? Math.max(item.repeats, options.minimumRepeats ?? 0) }, (_, repeat) => ({ item, repeat })));
+  const runTrial = async ({ item, repeat }, index) => {
     const phase = `evaluation-${label}-${suite.version}-${item.id}-${repeat}`;
+    const trial = controller.trialRecord?.(record, phase) ?? record;
     const reportId = `report-${phase}`;
-    if (fs.existsSync(controller.recordPath(state, reportId))) { const report = read(controller.recordPath(state, reportId)); reports.push(report); reportIds.push(reportId); continue; }
+    if (fs.existsSync(controller.recordPath(state, reportId))) { reports[index] = read(controller.recordPath(state, reportId)); reportIds[index] = reportId; return; }
     const folder = controller.evaluationFolder(state, phase);
     for (const fixture of item.fixtures ?? []) controller.fixture(folder, fixture);
     const request = { id: phase, goalId: state.id, trialId: phase, caseId: item.id, benchmarkVersion: version,
@@ -123,12 +126,15 @@ export async function evaluateCandidate(controller, record, candidate, label, su
     try {
       let target = policy.target;
       if (target === 'workflow') {
-        const executed = await controller.once(record, `candidate-${phase}`, candidate.source, item.input, folder);
+        const executed = await controller.once(trial, `candidate-${phase}`, candidate.source, item.input, folder);
         request.artifact.text = executed.output; target = 'artifact';
       }
       const source = evaluationRecipe({ request, target, targetConfig: policy.targetConfig ?? {}, ...(target === 'artifact' ? {} : { candidatePrompt: candidate.text }) });
-      const child = await controller.once(record, phase, source, item.input, policy.target === 'artifact' ? state.workspace.path : folder);
+      const child = await controller.once(trial, phase, source, item.input, policy.target === 'artifact' ? state.workspace.path : folder);
       report = JSON.parse(child.output); validateResult(report);
+      // Evaluator exception handling cannot swallow owner control decisions.
+      if (record.reserveHit) throw Object.assign(new Error('Search reached protected confirmation capacity'), { code: 'campaign_reserve' });
+      if (state.pricingPause) throw Object.assign(new Error(state.pricingPause), { code: 'campaign_pricing' });
     } catch (error) {
       const cancelled = Boolean(record.requested || record.abort?.signal.aborted), status = cancelled ? 'skipped' : 'error';
       report = { id: phase, version: 1, goalId: state.id, runId: state.activeChild?.runId ?? null, trialId: phase, caseId: item.id, benchmarkVersion: version, artifactDigest: digest(request.artifact), configDigest: digest(request.evaluators),
@@ -138,17 +144,25 @@ export async function evaluateCandidate(controller, record, candidate, label, su
         artifact: request.artifact, runtime: { attempted: false, completed: false, cancelled, unresolved: 1, infrastructure: true } };
       validateResult(report);
       // Stop/limits preserve ownership recovery; they never continue the suite.
-      if (cancelled || ['goal_limit', 'goal_cleanup_pending', 'goal_control'].includes(error.code)) {
+      if (cancelled || ['goal_limit', 'goal_cleanup_pending', 'goal_control', 'campaign_reserve', 'campaign_pricing'].includes(error.code)) {
         controller.putRecord(state, `${reportId}-interrupted`, report);
         state.evaluationInterruption = { record: `${reportId}-interrupted`, reason: report.checks[0].explanation }; controller.save(state);
         throw error;
       }
-      state.activeChild = null; controller.save(state);
+      trial.state.activeChild = null; controller.save(state);
     }
     controller.putRecord(state, reportId, report);
-    reports.push(report); reportIds.push(reportId);
-  }
-  return { ...aggregate(reports, cases.reduce((n, c) => n + c.repeats, 0)), benchmarkVersion: version, suiteVersion: suite.version, split, reportIds,
+    reports[index] = report; reportIds[index] = reportId;
+  };
+  // Settle every launched trial before releasing Goal ownership on failure.
+  let cursor = 0, failure = null;
+  const workers = Array.from({ length: Math.min(jobs.length, options.concurrency ?? state.contract.campaign?.concurrency ?? 1) }, async () => {
+    while (!failure && cursor < jobs.length) { const index = cursor++; try { await runTrial(jobs[index], index); } catch (error) { failure ??= error; } }
+  });
+  await Promise.allSettled(workers);
+  if (failure) throw failure;
+  return { ...aggregate(reports, jobs.length), benchmarkVersion: version, suiteVersion: suite.version, split, reportIds,
+    tier: options.tier ?? 'development', samples: reports.map((r, index) => ({ caseId: r.caseId, repeat: jobs[index].repeat, tags: jobs[index].item.tags ?? [], metrics: r.metrics, eligible: r.eligible, status: r.status, reportId: reportIds[index] })),
     model: state.contract.worker, configDigest: digest(policy), candidateDigest: digest(candidate), reports };
 }
 export function targetMet(evaluation, policy) {

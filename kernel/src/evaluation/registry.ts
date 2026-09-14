@@ -102,7 +102,7 @@ export class EvaluatorRegistry {
       let finding: Finding;
       try {
         if (request.signal?.aborted) finding = { status: 'skipped', code: 'cancelled' };
-        else if (spec.id === 'reference' && checks.some(c => c.mandatory && c.status !== 'pass')) finding = { status: 'inconclusive', code: 'candidate_requirements_unmet' };
+        else if (['ai-rubric', 'reference'].includes(spec.id) && checks.some(c => c.mandatory && c.status !== 'pass')) finding = { status: 'inconclusive', code: 'candidate_requirements_unmet' };
         else if (spec.id === 'reference' && (request.references?.length ?? 0) > 1) {
           const comparisons: Finding[] = [];
           for (const [index, reference] of request.references!.entries()) comparisons.push(await this.entries.get('reference@1')!.execute({ ...request, reference, references: undefined }, spec.config, facilities, `${spec.name}-ref-${index}`));
@@ -138,6 +138,11 @@ function pointer(value: any, path: string): any {
 }
 export const evaluators = new EvaluatorRegistry();
 const register = (entry: Omit<Evaluator, 'version' | 'inputTypes' | 'requirements'> & Partial<Pick<Evaluator, 'inputTypes' | 'requirements'>>) => evaluators.register({ version: 1, inputTypes: ['text', 'json'], requirements: [], ...entry });
+register({ id: 'text-limits', schema: object({ maxWords: { type: 'integer', minimum: 1, maximum: 100000 }, maxChars: { type: 'integer', minimum: 1, maximum: 64000 }, forbidden: { type: 'array', maxItems: 30, items: string } }), execute(request, config) {
+  const text = request.artifact.text, words = text.trim() ? text.trim().split(/\s+/u).length : 0;
+  const forbidden = (config.forbidden ?? []).filter((value: string) => text.includes(value));
+  return { ...result((config.maxWords == null || words <= config.maxWords) && (config.maxChars == null || text.length <= config.maxChars) && !forbidden.length, 'text_limits', `${words} words, ${text.length} characters${forbidden.length ? '; forbidden content: ' + forbidden.join(', ') : ''}`), evidence: { words, characters: text.length, forbidden } };
+} });
 register({ id: 'contains', schema: object({ value: string, path: { type: 'string', maxLength: 500 } }, ['value']), async execute(request, config, facilities) {
   let text = request.artifact.text;
   if (config.path) {
@@ -188,7 +193,7 @@ register({ id: 'command', requirements: ['approved-shell'], schema: object({ com
 register({ id: 'runtime', schema: object({}), execute(request) {
   const r = request.runtime ?? {};
   return { status: 'pass', code: 'observed_runtime_only', metrics: Object.fromEntries([
-    ['latencyMs', 'ms'], ['tokens', 'tokens'], ['knownUsd', 'USD'], ['repairs', 'count'], ['fallbacks', 'count'], ['unresolved', 'count']
+    ['latencyMs', 'ms'], ['planningMs', 'ms'], ['readyDelayMs', 'ms'], ['peakWorkers', 'count'], ['modelCalls', 'count'], ['tokens', 'tokens'], ['knownUsd', 'USD'], ['repairs', 'count'], ['fallbacks', 'count'], ['unresolved', 'count']
   ].map(([name, unit]) => [name, metric(typeof r[name] === 'number' ? r[name] : null, unit, 'lower', r[name] == null ? 0 : 1)])) };
 } });
 
@@ -201,6 +206,12 @@ async function judge(request: Request, config: any, facilities: Facilities, key:
   const packet = { request: request.originalRequest, constraints: request.constraints ?? '', artifacts: { A: a, ...(b === undefined ? {} : { B: b }) },
     verifiedEvidence: Object.fromEntries(['latencyMs', 'tokens', 'knownUsd', 'repairs', 'fallbacks', 'unresolved'].map(key => [key, request.runtime?.[key] ?? null])) };
   const value = await facilities.judge(packet, config, key);
+  validateJudgeEvidence(value, config, packet);
+  return { ...value, order: reverse ? ['reference', 'candidate'] : ['candidate', ...(b === undefined ? [] : ['reference'])], modelBased: true };
+}
+// Shared by the live judge repair loop and the independent registry boundary.
+export function validateJudgeEvidence(value: any, config: any, packet: any): void {
+  const { A: a, B: b } = packet.artifacts;
   if (!Array.isArray(value?.dimensions) || value.dimensions.length !== config.dimensions.length || new Set(value.dimensions.map((d: any) => d.id)).size !== config.dimensions.length) throw new Error('Malformed judge dimensions');
   for (const d of value.dimensions) {
     if (!config.dimensions.some((x: any) => x.id === d.id) || typeof d.abstain !== 'boolean' || typeof d.rationale !== 'string' || d.rationale.length > 1200 || !Array.isArray(d.locations) || d.locations.length > 8 || d.locations.some((l: any) => typeof l !== 'string' || l.length > 500)) throw new Error('Malformed judge evidence');
@@ -208,7 +219,6 @@ async function judge(request: Request, config: any, facilities: Facilities, key:
     if (![d.a, ...(b === undefined ? [] : [d.b])].every(n => Number.isFinite(n) && n >= 0 && n <= 4)) throw new Error('Invalid judge score');
     for (const [label, text] of [['A', a], ...(b === undefined ? [] : [['B', b]])]) if (!d.locations.some((loc: any) => typeof loc === 'string' && loc.startsWith(`${label}:`) && loc.length > 2 && text!.includes(loc.slice(2)))) throw new Error('Missing verifiable artifact citation');
   }
-  return { ...value, order: reverse ? ['reference', 'candidate'] : ['candidate', ...(b === undefined ? [] : ['reference'])], modelBased: true };
 }
 register({ id: 'ai-rubric', requirements: ['judge-model'], schema: RUBRIC_SCHEMA, async execute(request, config, facilities, key) {
   const evidence = await judge({ ...request, reference: undefined }, config, facilities, key);
@@ -244,14 +254,14 @@ register({ id: 'reference', requirements: ['judge-model'], schema: RUBRIC_SCHEMA
   return { status: comparison === 'inconclusive' ? 'inconclusive' : 'pass', code: invalidReference ? 'invalid_reference_review_required' : a !== b ? 'presentation_order_disagreement' : 'subjective_reference_comparison', comparison, evidence: { forward, reversed, policy: { noMandatoryRegression: true, priorities: config.priorities ?? [] } } };
 } });
 
-export function rank(candidate: { eligible: boolean; comparable?: boolean; benchmarkVersion?: string; metrics: Record<string, Metric> }, previous: typeof candidate | null, policy: { primary: string; tieBreakers?: string[]; minImprovement?: number }): boolean {
+export function rank(candidate: { eligible: boolean; comparable?: boolean; benchmarkVersion?: string; metrics: Record<string, Metric> }, previous: typeof candidate | null, policy: { primary: string; tieBreakers?: string[]; minImprovement?: number; tolerances?: Record<string, number> }): boolean {
   if (!candidate.eligible || candidate.comparable === false || [policy.primary, ...(policy.tieBreakers ?? [])].some(name => candidate.metrics[name]?.value == null)) return false;
   if (candidate.benchmarkVersion && previous?.benchmarkVersion && candidate.benchmarkVersion !== previous.benchmarkVersion) return false;
   if (!previous?.eligible) return true;
   for (const [index, name] of [policy.primary, ...(policy.tieBreakers ?? [])].entries()) {
     const a = candidate.metrics[name], b = previous.metrics[name];
     if (!a || !b || a.value === null || b.value === null || a.unit !== b.unit || a.direction !== b.direction) return false;
-    const delta = (a.value - b.value) * (a.direction === 'higher' ? 1 : -1), tolerance = index === 0 ? policy.minImprovement ?? 0 : 0;
+    const delta = (a.value - b.value) * (a.direction === 'higher' ? 1 : -1), tolerance = policy.tolerances?.[name] ?? (index === 0 ? policy.minImprovement ?? 0 : 0);
     if (delta > tolerance) return true;
     if (delta < -tolerance) return false;
   }

@@ -41,6 +41,8 @@ export interface SandboxProbe {
   enforcement: SandboxEnforcement | null;
   checkedAt: string;
   reason?: string;
+  /** Observed Node piped-child support, independent of filesystem confinement. */
+  nodePipedChildren?: boolean;
 }
 
 export interface SandboxSeam {

@@ -1,0 +1,1295 @@
+{
+  "date": "2026-09-13",
+  "status": "development evidence",
+  "limitation": "Trials span different code revisions and small smoke cases. They are not a reliability estimate or release qualification. Null cost/token values mean unavailable. Final source also reuses unchanged single-milestone acceptance to remove a duplicate review; that optimization is covered by deterministic tests, not these timings.",
+  "batches": [
+    {
+      "id": "live",
+      "note": "Initial forced-submission development probe.",
+      "model": "z-ai/glm-5.3-flash",
+      "provider": "openrouter",
+      "repetitions": 1,
+      "minutes": null,
+      "results": [
+        {
+          "case": "make-basic",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-25-13-967Z-jn5k",
+          "status": "failed",
+          "accepted": false,
+          "falseSuccess": false,
+          "mismatches": [
+            "target.txt"
+          ],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 75150,
+          "calls": 2,
+          "tokens": 1987,
+          "knownUsd": 0.00039194999999999996,
+          "unknownCostResponses": 0,
+          "error": "Block \"deliver\" failed: Task has unresolved requirements: Verify final content of target.txt with a read-back check to confirm it is exactly `after` plus a newline"
+        },
+        {
+          "case": "make-basic",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-26-29-462Z-pwu3",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 33033,
+          "calls": 6,
+          "tokens": 26187,
+          "knownUsd": 0.00277746,
+          "unknownCostResponses": 0,
+          "error": null
+        }
+      ]
+    },
+    {
+      "id": "live-fixed",
+      "note": "Automatic tool selection; exposed nested workspace and citation handling defects.",
+      "model": "z-ai/glm-5.3-flash",
+      "provider": "openrouter",
+      "repetitions": 1,
+      "minutes": null,
+      "results": [
+        {
+          "case": "make-basic",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-27-47-535Z-y4hb",
+          "status": "failed",
+          "accepted": false,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 14168,
+          "calls": 3,
+          "tokens": 11352,
+          "knownUsd": 0.0011677699999999998,
+          "unknownCostResponses": 0,
+          "error": "Block \"deliver\" failed: The worker reported implementation but produced no workspace change."
+        },
+        {
+          "case": "make-basic",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-28-01-978Z-fdaf",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 10220,
+          "calls": 3,
+          "tokens": 11856,
+          "knownUsd": 0.00058445,
+          "unknownCostResponses": 0,
+          "error": null
+        },
+        {
+          "case": "research-project",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-28-12-462Z-15iq",
+          "status": "failed",
+          "accepted": false,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [
+            "Thursday"
+          ],
+          "semantic": true,
+          "durationMs": 8358,
+          "calls": 2,
+          "tokens": 4460,
+          "knownUsd": 0.00039499,
+          "unknownCostResponses": 0,
+          "error": "Block \"research\" failed: Research source was not supported by an opened result: facts.txt"
+        },
+        {
+          "case": "research-project",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-28-21-096Z-hbnl",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 8190,
+          "calls": 3,
+          "tokens": 5611,
+          "knownUsd": 0.0005957,
+          "unknownCostResponses": 0,
+          "error": null
+        },
+        {
+          "case": "complex-basic",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-28-29-526Z-3cj0",
+          "status": "stopped",
+          "accepted": false,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 600158,
+          "calls": 14,
+          "tokens": 87933,
+          "knownUsd": 0.00920260675,
+          "unknownCostResponses": 0,
+          "error": null
+        },
+        {
+          "case": "complex-basic",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-38-29-991Z-3ynr",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 33891,
+          "calls": 5,
+          "tokens": 22091,
+          "knownUsd": 0.0022554999999999997,
+          "unknownCostResponses": 0,
+          "error": null
+        }
+      ]
+    },
+    {
+      "id": "live-verified",
+      "note": "Development batch spanning native Windows command repair.",
+      "model": "z-ai/glm-5.3-flash",
+      "provider": "openrouter",
+      "repetitions": 1,
+      "minutes": null,
+      "results": [
+        {
+          "case": "make-basic",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-35-08-575Z-ry8h",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 96176,
+          "calls": 6,
+          "tokens": 27495,
+          "knownUsd": 0.004045344,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-35-08-575Z-ry8h",
+              "events": 479
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "make-basic",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-36-45-426Z-h3j3",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 81023,
+          "calls": 4,
+          "tokens": 16982,
+          "knownUsd": 0.0007444800000000001,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-36-45-426Z-h3j3",
+              "events": 154
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "bug-value",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-38-06-708Z-zrnv",
+          "status": "failed",
+          "accepted": false,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 349820,
+          "calls": 17,
+          "tokens": 173107,
+          "knownUsd": 0.00898193089,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-38-06-708Z-zrnv",
+              "events": 1893
+            }
+          ],
+          "error": "Block \"fix\" failed: Task has unresolved requirements: Bare 'node' could not be executed in this sandbox (commands without a .exe extension or containing a shell alias fail with a wrapper error; bash.exe is access-denied), so the required reproduction was run via the equivalent 'node.exe' invocation of the same Node v22.12.0 binary; canonical 'node -e ...' form should run normally in an unrestricted environment; No automated test files or declared gates exist in the workspace (only value.cjs), so verification relies on the required one-liner"
+        },
+        {
+          "case": "bug-value",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-43-56-799Z-78d0",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 42554,
+          "calls": 5,
+          "tokens": 21436,
+          "knownUsd": 0.00232519,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-43-56-799Z-78d0",
+              "events": 184
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "review-bug",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-44-39-759Z-dksu",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 33650,
+          "calls": 2,
+          "tokens": 7623,
+          "knownUsd": 0.0016806074500000001,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-44-39-759Z-dksu",
+              "events": 205
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "review-bug",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-45-13-836Z-dvss",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 9483,
+          "calls": 3,
+          "tokens": 6656,
+          "knownUsd": 0.00130465,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-45-13-836Z-dvss",
+              "events": 132
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "research-project",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-45-23-548Z-neyd",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 8668,
+          "calls": 3,
+          "tokens": 6953,
+          "knownUsd": 0.00067953,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-45-23-548Z-neyd",
+              "events": 93
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "research-project",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-45-32-436Z-1lpj",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 3113,
+          "calls": 2,
+          "tokens": 3672,
+          "knownUsd": 0.0003945,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-45-32-436Z-1lpj",
+              "events": 53
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "plan-complete",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-45-35-763Z-88yq",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 96463,
+          "calls": 2,
+          "tokens": 7141,
+          "knownUsd": 0.00111606243,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-45-35-763Z-88yq",
+              "events": 248
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "plan-complete",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-47-12-807Z-pq2z",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 88787,
+          "calls": 2,
+          "tokens": 7056,
+          "knownUsd": 0.00121527,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-47-12-807Z-pq2z",
+              "events": 379
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "complex-basic",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-48-41-893Z-iaqt",
+          "status": "failed",
+          "accepted": false,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 138292,
+          "calls": 9,
+          "tokens": 35142,
+          "knownUsd": 0.0032309613000000006,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-48-41-893Z-iaqt",
+              "events": 704
+            }
+          ],
+          "error": "Block \"delivery\" failed: Review citation does not match target.txt:1."
+        },
+        {
+          "case": "complex-basic",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-51-00-417Z-lhdx",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 34646,
+          "calls": 4,
+          "tokens": 18020,
+          "knownUsd": 0.0009165128499999999,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-51-00-417Z-lhdx",
+              "events": 156
+            }
+          ],
+          "error": null
+        }
+      ]
+    },
+    {
+      "id": "release-pilot",
+      "note": "Automatic-selection smoke batch before final effect and report recovery corrections.",
+      "model": "z-ai/glm-5.3-flash",
+      "provider": "openrouter",
+      "repetitions": 1,
+      "minutes": 3,
+      "results": [
+        {
+          "case": "make-basic",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-42-21-161Z-cibk",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 68214,
+          "calls": 6,
+          "tokens": 20924,
+          "knownUsd": 0.0025257478000000003,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-42-21-161Z-cibk",
+              "events": 500
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "make-basic",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-43-29-665Z-vw4z",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 34787,
+          "calls": 6,
+          "tokens": 25320,
+          "knownUsd": 0.0009494799999999998,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-43-29-665Z-vw4z",
+              "events": 203
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "bug-value",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-44-04-695Z-pl1h",
+          "status": "failed",
+          "accepted": false,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 42126,
+          "calls": 6,
+          "tokens": 25970,
+          "knownUsd": 0.00128225055,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-44-04-695Z-pl1h",
+              "events": 203
+            }
+          ],
+          "error": "Block \"fix\" failed: No observed failing reproduction was recorded before the repair. Diagnosis is retained, but the bug is not verified fixed."
+        },
+        {
+          "case": "bug-value",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-44-47-100Z-6geg",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 40774,
+          "calls": 4,
+          "tokens": 18801,
+          "knownUsd": 0.00249305705,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-44-47-100Z-6geg",
+              "events": 232
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "review-bug",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-45-28-268Z-0u6i",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 53882,
+          "calls": 2,
+          "tokens": 8312,
+          "knownUsd": 0.00133780388,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-45-28-268Z-0u6i",
+              "events": 180
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "review-bug",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-46-23-398Z-3c01",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 48659,
+          "calls": 3,
+          "tokens": 6499,
+          "knownUsd": 0.0009457199999999999,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-46-23-398Z-3c01",
+              "events": 140
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "research-project",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-47-12-588Z-4270",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 7029,
+          "calls": 2,
+          "tokens": 4600,
+          "knownUsd": 0.00046314,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-47-12-588Z-4270",
+              "events": 69
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "research-project",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-47-20-052Z-iujl",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 2472,
+          "calls": 2,
+          "tokens": 3719,
+          "knownUsd": 0.00020959,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-47-20-052Z-iujl",
+              "events": 53
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "plan-complete",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-47-22-922Z-h3a9",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 91368,
+          "calls": 2,
+          "tokens": 8779,
+          "knownUsd": 0.0015735366500000002,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-47-22-922Z-h3a9",
+              "events": 460
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "plan-complete",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-48-54-592Z-2w7l",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 57044,
+          "calls": 2,
+          "tokens": 5633,
+          "knownUsd": 0.0008982,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-48-54-592Z-2w7l",
+              "events": 265
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "complex-basic",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-49-51-869Z-0wq0",
+          "status": "stopped",
+          "accepted": false,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 180139,
+          "calls": 12,
+          "tokens": null,
+          "knownUsd": null,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-49-51-869Z-0wq0",
+              "events": 1038
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "complex-basic",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-52-52-289Z-ucrt",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 38395,
+          "calls": 4,
+          "tokens": 18372,
+          "knownUsd": 0.00145991543,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-52-52-289Z-ucrt",
+              "events": 227
+            }
+          ],
+          "error": null
+        }
+      ]
+    },
+    {
+      "id": "bug-pilot",
+      "note": "Repeated bug probes before correcting nested workspace effect attribution.",
+      "model": "z-ai/glm-5.3-flash",
+      "provider": "openrouter",
+      "repetitions": 3,
+      "minutes": 3,
+      "results": [
+        {
+          "case": "bug-value",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-48-43-665Z-wxyk",
+          "status": "failed",
+          "accepted": false,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 71145,
+          "calls": 5,
+          "tokens": 18378,
+          "knownUsd": 0.001590296,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-48-43-665Z-wxyk",
+              "events": 314
+            }
+          ],
+          "error": "Block \"fix\" failed: Task blocked: The prior submission failed schema validation because its result payload was a string (\"Fixed and verified. Submitting the result:\") rather than an object. The payload contained no recoverable facts, file paths, verification commands, or evidence, so the claimed fix cannot be restated or confirmed. No work was performed or evidence invented during this repair; only the result format was corrected.\nOriginal task outcome (claimed fix and its verification) is unknown and unverified; it must be re-submitted with actual facts and evidence.\nNo constraints from the original request can be confirmed as satisfied."
+        },
+        {
+          "case": "bug-value",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-49-55-096Z-at3s",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 28846,
+          "calls": 6,
+          "tokens": 27719,
+          "knownUsd": 0.00222863952,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-49-55-096Z-at3s",
+              "events": 257
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "bug-value",
+          "variant": "baseline",
+          "repeat": 2,
+          "runId": "2026-09-13T15-50-24-186Z-afa7",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 38424,
+          "calls": 6,
+          "tokens": 27138,
+          "knownUsd": 0.0009584129100000001,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-50-24-186Z-afa7",
+              "events": 215
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "bug-value",
+          "variant": "candidate",
+          "repeat": 2,
+          "runId": "2026-09-13T15-51-02-855Z-z4om",
+          "status": "failed",
+          "accepted": false,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 24730,
+          "calls": 6,
+          "tokens": 27161,
+          "knownUsd": 0.001137348,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-51-02-855Z-z4om",
+              "events": 205
+            }
+          ],
+          "error": "Block \"fix\" failed: No observed failing reproduction was recorded before the repair. Diagnosis is retained, but the bug is not verified fixed."
+        },
+        {
+          "case": "bug-value",
+          "variant": "candidate",
+          "repeat": 3,
+          "runId": "2026-09-13T15-51-27-907Z-phyd",
+          "status": "failed",
+          "accepted": false,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 38004,
+          "calls": 7,
+          "tokens": 32342,
+          "knownUsd": 0.001075044,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-51-27-907Z-phyd",
+              "events": 233
+            }
+          ],
+          "error": "Block \"fix\" failed: No observed failing reproduction was recorded before the repair. Diagnosis is retained, but the bug is not verified fixed."
+        },
+        {
+          "case": "bug-value",
+          "variant": "baseline",
+          "repeat": 3,
+          "runId": "2026-09-13T15-52-06-141Z-0zsk",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 27961,
+          "calls": 5,
+          "tokens": 21677,
+          "knownUsd": 0.0010855182100000002,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-52-06-141Z-0zsk",
+              "events": 165
+            }
+          ],
+          "error": null
+        }
+      ]
+    },
+    {
+      "id": "final-probe",
+      "note": "Required-tool-selection experiment, subsequently reverted.",
+      "model": "z-ai/glm-5.3-flash",
+      "provider": "openrouter",
+      "repetitions": 1,
+      "minutes": 3,
+      "results": [
+        {
+          "case": "bug-value",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-52-56-354Z-ri6u",
+          "status": "stopped",
+          "accepted": false,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 180125,
+          "calls": 11,
+          "tokens": null,
+          "knownUsd": null,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-52-56-354Z-ri6u",
+              "events": 613
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "bug-value",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-55-57-195Z-u6ar",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 38559,
+          "calls": 6,
+          "tokens": 26164,
+          "knownUsd": 0.00118695528,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-55-57-195Z-u6ar",
+              "events": 198
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "complex-basic",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-56-36-132Z-w1sz",
+          "status": "stopped",
+          "accepted": false,
+          "falseSuccess": false,
+          "mismatches": [
+            "target.txt"
+          ],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 180070,
+          "calls": 2,
+          "tokens": null,
+          "knownUsd": null,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-56-36-132Z-w1sz",
+              "events": 335
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "complex-basic",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-59-36-446Z-p0kq",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 44240,
+          "calls": 5,
+          "tokens": 22843,
+          "knownUsd": 0.00099882895,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-59-36-446Z-p0kq",
+              "events": 252
+            }
+          ],
+          "error": null
+        }
+      ]
+    },
+    {
+      "id": "final-readers",
+      "note": "Required-tool-selection experiment, subsequently reverted.",
+      "model": "z-ai/glm-5.3-flash",
+      "provider": "openrouter",
+      "repetitions": 1,
+      "minutes": 3,
+      "results": [
+        {
+          "case": "make-basic",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-53-58-599Z-v3j1",
+          "status": "stopped",
+          "accepted": false,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 180080,
+          "calls": 6,
+          "tokens": null,
+          "knownUsd": null,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-53-58-599Z-v3j1",
+              "events": 421
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "make-basic",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-56-58-995Z-t3lo",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 38941,
+          "calls": 4,
+          "tokens": 16133,
+          "knownUsd": 0.0010084199999999999,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-56-58-995Z-t3lo",
+              "events": 127
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "review-bug",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-57-38-368Z-ycfy",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 77953,
+          "calls": 3,
+          "tokens": 9597,
+          "knownUsd": 0.0008905199999999999,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-57-38-368Z-ycfy",
+              "events": 160
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "review-bug",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-58-56-761Z-oxyz",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 39690,
+          "calls": 3,
+          "tokens": 6666,
+          "knownUsd": 0.0006021885099999999,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-58-56-761Z-oxyz",
+              "events": 163
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "research-project",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-59-36-696Z-16xg",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 13359,
+          "calls": 2,
+          "tokens": 4461,
+          "knownUsd": 0.000409525,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-59-36-696Z-16xg",
+              "events": 78
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "research-project",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-59-50-297Z-t702",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 8223,
+          "calls": 2,
+          "tokens": 3657,
+          "knownUsd": 0.0005783,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-59-50-297Z-t702",
+              "events": 50
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "plan-complete",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-59-58-754Z-kyf3",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 137073,
+          "calls": 3,
+          "tokens": 12745,
+          "knownUsd": 0.00319001,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-59-58-754Z-kyf3",
+              "events": 1153
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "plan-complete",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T16-02-16-060Z-gd49",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 52196,
+          "calls": 1,
+          "tokens": 3105,
+          "knownUsd": 0.00056463,
+          "sessions": [
+            {
+              "runId": "2026-09-13T16-02-16-060Z-gd49",
+              "events": 224
+            }
+          ],
+          "error": null
+        }
+      ]
+    },
+    {
+      "id": "accepted-probe",
+      "note": "Automatic selection with evidence recovery and corrected effects; before single-milestone review reuse.",
+      "model": "z-ai/glm-5.3-flash",
+      "provider": "openrouter",
+      "repetitions": 1,
+      "minutes": 5,
+      "results": [
+        {
+          "case": "bug-value",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-57-09-898Z-e6cf",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 119387,
+          "calls": 10,
+          "tokens": 46497,
+          "knownUsd": 0.00454296204,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-57-09-898Z-e6cf",
+              "events": 632
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "bug-value",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T15-59-09-581Z-7gnm",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 33764,
+          "calls": 5,
+          "tokens": 21169,
+          "knownUsd": 0.00123994173,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-59-09-581Z-7gnm",
+              "events": 156
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "complex-basic",
+          "variant": "candidate",
+          "repeat": 1,
+          "runId": "2026-09-13T15-59-43-589Z-0pmk",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 299319,
+          "calls": 16,
+          "tokens": 80798,
+          "knownUsd": 0.00848243049,
+          "sessions": [
+            {
+              "runId": "2026-09-13T15-59-43-589Z-0pmk",
+              "events": 1642
+            }
+          ],
+          "error": null
+        },
+        {
+          "case": "complex-basic",
+          "variant": "baseline",
+          "repeat": 1,
+          "runId": "2026-09-13T16-04-43-148Z-0ede",
+          "status": "done",
+          "accepted": true,
+          "falseSuccess": false,
+          "mismatches": [],
+          "missingText": [],
+          "semantic": true,
+          "durationMs": 37153,
+          "calls": 5,
+          "tokens": 21772,
+          "knownUsd": 0.00111742561,
+          "sessions": [
+            {
+              "runId": "2026-09-13T16-04-43-148Z-0ede",
+              "events": 205
+            }
+          ],
+          "error": null
+        }
+      ]
+    }
+  ]
+}

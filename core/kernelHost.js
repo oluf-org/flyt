@@ -18,6 +18,8 @@ import { executeTool, getTools, refusedResult } from './tools/index.js';
 import { previewResult } from './tools/preview.js';
 import { loadSkills, skillsSection } from './skills.js';
 import { captureWorkspaceSignature } from './effect.js';
+import { createRepoChangeTracker } from './repoChanges.js';
+import { createWorkflowSupport } from './workflowSupport.js';
 import { snapshotStackRun } from './runProjection.js';
 
 const safeJson = value => {
@@ -67,7 +69,7 @@ function configuredTree(root, {
       // Pinning only `work` left plan, judgement, and inquiry blocks on their schema default
       // (`openrouter/auto`), so a workflow could silently use a different
       // provider from the executor selected for the run.
-      const instructions = node.use === 'flyt-blocks-core:work'
+      const instructions = node.use === 'flyt-blocks-core:work' || node.use.startsWith('flyt-blocks-delivery:')
         ? [base.instructions, skillText].filter(Boolean).join('\n\n')
         : base.instructions;
       const tier = useAuthoredTiers && typeof base.modelTier === 'string' ? base.modelTier : null;
@@ -149,6 +151,7 @@ export async function bootRunKernel({
   // not reject the same directory merely because it arrived through an alias.
   const workspace = new Workspace(fs.realpathSync(path.resolve(workspaceDir)));
   const baselines = new Map();
+  const repoChanges = createRepoChangeTracker(store, workspace.root);
   const skillLoad = loadSkills(workspace, skills);
   const skillText = skillsSection(skillLoad.found);
   const model = worker?.model ?? null;
@@ -199,11 +202,14 @@ export async function bootRunKernel({
     };
     return profile;
   };
+  const workflowSupport = createWorkflowSupport({ workspace: workspace.root, sessions: booted.ctx.sessions, runsRoot });
+  booted.ctx.workflowSupport = workflowSupport;
   const callThrough = async request => {
     const policy = { ...DEFAULT_RETRY, ...runtimeConfig.retry, ...request.retry };
-    const attempts = goalGuard ? Math.max(1, Math.min(5, policy.attempts)) : 1;
+    const attempts = Math.max(1, Math.min(5, policy.attempts));
     for (let attempt = 0; attempt < attempts; attempt++) {
       await goalGuard?.beforeCall(request);
+      const workflowTicket = workflowSupport.tracks(request) ? await workflowSupport.beforeCall(request) : null;
       let result;
       try {
         result = await call({
@@ -211,7 +217,7 @@ export async function bootRunKernel({
           ...(runtimeConfig.timeout ? { timeout: runtimeConfig.timeout } : {}),
           ...request,
           // Each Goal attempt must pass through accounting, including retries.
-          ...(goalGuard ? { retry: { attempts: 1 } } : {}),
+          ...((goalGuard || workflowTicket) ? { retry: { attempts: 1 } } : {}),
           // Auto Router bands belong to worker selection as well as model ID.
           ...((workerByModel.get(request.model)?.routing
             ?? (request.model === model ? worker?.routing : null)) ? {
@@ -220,8 +226,9 @@ export async function bootRunKernel({
         });
       } catch (error) {
         await goalGuard?.callFailed?.(error);
+        await workflowSupport.afterCall(workflowTicket, null);
         const failure = error.failure ?? classifyAdapterError(error, request);
-        if (!goalGuard || attempt + 1 >= attempts || request.signal?.aborted || !failure.retryable
+        if ((!goalGuard && !workflowTicket) || attempt + 1 >= attempts || request.signal?.aborted || !failure.retryable
           || failure.userInitiated || failure.visibleOutputProduced || failure.toolCallProduced || failure.durableWriteProduced) throw error;
         const delayMs = Math.round(Math.min(policy.maxMs, Math.max(policy.baseMs * 2 ** attempt, error.retryAfterMs ?? 0)));
         request.onRetry?.({ attempt: attempt + 1, attempts, delayMs, failure, error: String(error.message).slice(0, 300) });
@@ -230,6 +237,7 @@ export async function bootRunKernel({
         continue;
       }
       await goalGuard?.afterCall(result);
+      await workflowSupport.afterCall(workflowTicket, result);
       return result;
     }
   };
@@ -297,7 +305,7 @@ export async function bootRunKernel({
           }
           return { content: safeJson({ answered: true, answer: typeof answer === 'object' ? answer.text : String(answer ?? '') }) };
         }
-        const record = await executeTool(tool.name, args, {
+        const invoke = () => executeTool(tool.name, args, {
           store, runId: execution.runId, nodeId: execution.blockId,
           taskId: loopTaskId, workspace, backlog, pool, references,
           defaultWorker: worker, projectConfig: workspace.readConfig(), settings,
@@ -321,14 +329,19 @@ export async function bootRunKernel({
           // It deliberately reuses the host's coalesced session observer.
           notify: () => onSessionEvent?.(execution.runId, { type: 'tool.progress', data: null }),
         });
+        let observedEffect = null;
+        const record = await (classificationOf(tool).effect === 'read' ? invoke()
+          : repoChanges.observe(execution.runId, tool.name, execution.blockId, invoke, observation => { observedEffect = observation; }));
         const baseline = baselines.get(execution.runId);
         if (baseline) {
           const current = captureWorkspaceSignature(workspace.root);
-          const changed = safeJson(current) !== safeJson(baseline);
+          const changed = observedEffect?.changed === true || safeJson(current) !== safeJson(baseline);
           const session = await booted.ctx.sessions.open(execution.runId);
           await session.append({
             type: 'workspace.observed',
-            data: { changed, kind: current.kind, tool: tool.name },
+            data: { changed, changedSinceCall: observedEffect?.changed === true,
+              ...(observedEffect?.digest ? { digest: observedEffect.digest } : {}),
+              blockId: execution.blockId, callId: execution.call.id, kind: current.kind, tool: tool.name },
           });
         }
         const complete = jsonValue(record.ok ? record.result : { error: record.error });
@@ -347,9 +360,10 @@ export async function bootRunKernel({
     });
   }
 
+  if (goalGuard?.evaluationEvidence) booted.ctx.goalEvaluationEvidence = goalGuard.evaluationEvidence;
   if (goalGuard?.history) booted.ctx.tools.register({
     name: 'goal_history', description: 'Retrieve bounded evidence from this Goal only. Search earlier attempts or request one iteration by number.',
-    parameters: { type: 'object', properties: { query: { type: 'string' }, iteration: { type: 'integer', minimum: 1 }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 10 } }, additionalProperties: false },
+    parameters: { type: 'object', properties: { query: { type: 'string' }, iteration: { type: 'integer', minimum: 1 }, candidateId: { type: 'string' }, part: { enum: ['text', 'source'] }, reportId: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 10 } }, additionalProperties: false },
     classification: { effect: 'read', destructive: false, untrustedInput: false, source: 'confirmed' },
     async execute(args) { return { content: safeJson(await goalGuard.history(args)) }; },
   });
@@ -439,7 +453,10 @@ export async function bootRunKernel({
       };
       visit(resolveWorkflow(stackId));
     },
-    beginRun(id) { baselines.set(id, captureWorkspaceSignature(workspace.root)); },
+    beginRun(id) {
+      baselines.set(id, captureWorkspaceSignature(workspace.root));
+      try { repoChanges.initialize(id); } catch { /* Optional change history cannot prevent launch. */ }
+    },
   };
 }
 

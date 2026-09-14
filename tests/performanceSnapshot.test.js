@@ -41,6 +41,43 @@ test('incremental Work equals canonical replay at every lifecycle/call/generated
  reader.drop(root,id);await check();
 });
 
+test('retry preserves recap history without showing an obsolete failure as the current result', async t => {
+ const {add,check,reader,root,id}=setup(t);
+ add('run.created',{});add('run.stage',{stage:'execution'});
+ add('run.error',{error:'Previous attempt failed'});add('run.stage',{stage:'failed'});add('supervisor.summary',{content:'Previous attempt failed'});
+ assert.equal((await check()).conversation.at(-1).superseded,false);
+ add('run.stage',{stage:'resumed'});
+ let view=await check();
+ assert.equal(view.meta.error,null,'Retry clears the current error while retaining its historical event');
+ assert.equal(view.conversation.length,1,'historical result remains available');
+ assert.equal(view.conversation.at(-1).superseded,true);
+ add('run.stage',{stage:'done'});
+ assert.equal((await check()).conversation.filter(turn=>!turn.superseded).length,0,'no stale recap while the replacement is pending');
+ add('supervisor.summary',{content:'Recovered and verified'});
+ view=await check();
+ assert.deepEqual(view.conversation.map(turn=>turn.superseded),[true,false]);
+ reader.drop(root,id);
+ assert.deepEqual((await check()).conversation,view.conversation,'reopening history has the same result');
+});
+
+test('reopening an old degraded recap uses current root outcome and excludes a superseded run error', async t => {
+ const {add,check}=setup(t);
+ add('run.created',{});
+ add('stack.resolved',{stack:{kind:'sequence',children:[{kind:'block',id:'delivery'}]}});
+ add('run.error',{error:'Old citation mismatch'});
+ add('block.output',{blockId:'delivery',content:'Incomplete: old failure'});
+ add('run.stage',{stage:'resumed'});
+ add('block.output',{blockId:'delivery.review',content:'Internal review output'});
+ add('block.output',{blockId:'delivery',content:'Both milestones and integration verified'});
+ add('block.status',{blockId:'delivery',status:'done'});
+ add('run.stage',{stage:'done'});
+ add('supervisor.summary',{content:'The workflow finished. Run error: Old citation mismatch',degraded:true,capsule:{workflow:'test',error:'Old citation mismatch'}});
+ const view=await check();
+ assert.equal(view.meta.error,null);
+ assert.match(view.conversation.at(-1).text,/Final result from delivery:\n\nBoth milestones and integration verified/);
+ assert.doesNotMatch(view.conversation.at(-1).text,/Old citation mismatch|Internal review output/);
+});
+
 test('verified suffix parses no historical stream or tool body and large logs retain snapshots',async t=>{
  const {add,check,reader,root,id,file}=setup(t,{maxBytes:1024});
  add('run.created',{});add('tool.result',{name:'read_file',content:'x'.repeat(2*1024*1024)});

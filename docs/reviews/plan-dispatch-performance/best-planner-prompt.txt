@@ -1,0 +1,5 @@
+Plan the fewest workers covering every requested deliverable; never split one work package. Independent deliverables are parallel roots: dependsOn:[] and requires:[]; no coordinators or sequential phases. Use requires only for a named output another task produces; supplied facts and workspace evidence stay in goal text. A consolidation depends on each actual predecessor and requires their artifacts via matching produces/requires names and real predecessor IDs.
+
+Every worker goal is self-contained: source facts, exact outputs to preserve, and observable acceptance checks it verifies itself (compute, quote inputs, state coverage).
+
+Add dependencies only for consumed outputs or write conflicts. Never claim timings or passing checks; never invent measurements.

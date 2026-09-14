@@ -36,6 +36,7 @@ export interface CallModel {
   (request: {
     provider: string;
     model: string;
+    executionContext?: { runId: string; blockId: string; after: number };
     messages?: unknown;
     system?: string;
     prompt?: string;
@@ -50,6 +51,7 @@ export interface CallModel {
     responseFormat?: { name: string; description?: string; schema: JsonValue; strict?: boolean };
     reasoning?: { effort?: string; mode?: string; context?: string; summary?: string };
     toolChoice?: unknown;
+    requireParameters?: boolean;
     signal?: AbortSignal;
     onRetry?: (record: Record<string, unknown>) => void;
     onCall?: (record: Record<string, unknown>) => void;
@@ -321,7 +323,7 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
           reason: canSchema
             ? 'the model/provider reports native JSON Schema support'
             : canSynthetic
-              ? 'native schema was unavailable, so the reserved submission tool is forced'
+              ? request.tools?.length ? 'native schema was unavailable; ordinary tools and final structured submission remain selectable' : 'native schema was unavailable, so the reserved submission tool is forced'
               : 'neither native schema nor native tool submission is known usable',
         });
         for (const [key, value] of Object.entries(request.reasoning ?? {})) {
@@ -343,6 +345,7 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
         answered = await config.callModel({
           provider: source.provider,
           model: source.model,
+          ...(request.assetContext ? { executionContext: request.assetContext } : {}),
           messages: messagesFor(request, budget.messages, assets),
           ...(source.apiKey ? { apiKey: source.apiKey } : {}),
           ...(source.keyKind ? { keyKind: source.keyKind } : {}),
@@ -353,7 +356,9 @@ export function apply(ctx: Context, config: LlmAdaptersConfig): () => void {
           })) } : {}),
           maxTokens: budget.effectiveOutput,
           ...(canSchema ? { responseFormat: structured } : {}),
-          ...(canSynthetic ? { toolChoice: { type: 'function', function: { name: structured.name } } } : {}),
+          ...(canSynthetic ? { toolChoice: request.tools?.length ? 'auto' : { type: 'function', function: { name: structured.name } } } : {}),
+          ...(source.provider === 'openrouter' && (canSchema || (canSynthetic && !request.tools?.length))
+            ? { requireParameters: true } : {}),
           ...(effectiveReasoning && Object.keys(effectiveReasoning).length ? { reasoning: effectiveReasoning } : {}),
           onRetry: record => {
             if (request.onTelemetry) telemetryWrites.push(Promise.resolve(request.onTelemetry({ kind: 'retry', ...(record as Record<string, JsonValue>) })));

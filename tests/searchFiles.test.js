@@ -51,6 +51,24 @@ test('canonical search success never mutates the legacy run log', async () => {
   assert.equal(result.result.hits, 1);
 });
 
+test('search excludes its own run history while retaining authored Flyt configuration', async () => {
+  const files = {
+    '.flyt/runs/chat/session.jsonl': 'cloud sync claim from the model',
+    '.flyt/config.json': 'cloud sync disabled',
+    'src/storage.js': 'cloud sync is absent',
+  };
+  const { ctx } = project(files);
+  for (const seam of [false, true]) {
+    if (seam) ctx.fs = {
+      list: async () => Object.keys(files).map(path => ({ path, kind: 'file' })),
+      read: async path => files[path],
+    };
+    const result = await run(ctx, { pattern: 'cloud sync' });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.result.results.map(x => x.path).sort(), ['.flyt/config.json', 'src/storage.js']);
+  }
+});
+
 test('a glob narrows it to the files worth searching', async () => {
   const { ctx } = project({
     'src/a.jsx': 'const stage = "awaiting_input";\n',

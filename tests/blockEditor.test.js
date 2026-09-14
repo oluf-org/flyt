@@ -249,8 +249,8 @@ test('generated tasks hang off a dispatch rail while activity steps keep compact
     'the rail leaves the dispatch card and fades out rather than framing the fan-out');
   assert.match(styles, /\.be-wave-pip \{[^}]+position: absolute[^}]+border: 1\.5px solid var\(--be-rail\)/,
     'the pip sits on the rail, which is what lets waves drop their dividers');
-  assert.match(styles, /\.be-wave-tasks \{[^}]+grid-template-columns: repeat\(auto-fill, minmax\(/,
-    'a wave fills the width it is given instead of one lane per task');
+  assert.match(styles, /\.be-wave-tasks \{[^}]+grid-template-columns: repeat\(auto-fit, minmax\(/,
+    'a wave fills its width and collapses empty lanes when only one task exists');
   assert.match(component, /if \(!started && !state\.failure\?\.code && !state\.blockedBy\?\.length\) return null;/,
     'a queued task reports what blocks it, never an attempt counter for work that has not run');
   assert.match(styles, /\.be-activity-list \{[^}]+gap: 0/,

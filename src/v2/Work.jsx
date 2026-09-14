@@ -5,6 +5,7 @@ import { workflowActions } from '../../core/lifecycle.js';
 import { createRunView } from './runView.js';
 import { groupRuns, runStatus, runTimeLabel, runTimeTitle } from '../runList.js';
 import DebugPanel from './DebugPanel.jsx';
+import RepoChanges from './RepoChanges.jsx';
 import ActivityIcon from '../ActivityIcon.jsx';
 import { loopLabel } from '../activityFormat.js';
 import './workStyles.css';
@@ -64,6 +65,7 @@ function ChatHistory({ runs, activeRunId, onOpenRun, onNewChat, onOpenHistory })
           const id = run.id ?? run.runId;
           const status = run.kind === 'loop' ? { ...runStatus(run), label: loopLabel(run.status) } : runStatus(run);
           return <button type="button" className={`work-history-item${id === activeRunId ? ' active' : ''}`}
+            data-run-id={id}
             key={id} onClick={() => onOpenRun?.(id)} aria-current={id === activeRunId ? 'page' : undefined}
             title={`${run.name ?? run.flowName ?? id}\n${runTimeTitle(run)} · ${status.label}`}>
             <ActivityIcon kind={run.kind} id={id} size={20}/>
@@ -83,11 +85,12 @@ const STAGE_LABELS = {
   rejected: 'Rejected', interrupted: 'Interrupted', cancelled: 'Stopped',
 };
 
-function RunActions({ view, onPauseRun, onResumeRun, onStopRun, onRetryCleanup, onOpenFlow, onOpenDebug, pauseBusy, resumeBusy, stopBusy }) {
+function RunActions({ view, interaction, onPauseRun, onResumeRun, onStopRun, onRetryCleanup, onOpenFlow, onOpenDebug, pauseBusy, resumeBusy, stopBusy }) {
   const menu = useRef(null);
   const actions = view.actions ?? workflowActions(view.stage, view.lifecycle);
   const cleaning = view.lifecycle?.phase === 'settled' && ['running', 'failed', 'pending'].includes(view.lifecycle.cleanup);
-  const label = (cleaning ? (view.lifecycle.cleanup === 'failed' ? 'Cleanup needs attention' : 'Finishing cleanup') : STAGE_LABELS[view.stage]) ?? (view.stage ? view.stage.replaceAll('_', ' ') : 'Starting');
+  const interactionLabel = interaction ? (interaction.kind === 'approval' ? 'Needs approval' : 'Needs an answer') : null;
+  const label = (cleaning ? (view.lifecycle.cleanup === 'failed' ? 'Cleanup needs attention' : 'Finishing cleanup') : interactionLabel ?? STAGE_LABELS[view.stage]) ?? (view.stage ? view.stage.replaceAll('_', ' ') : 'Starting');
   useEffect(() => {
     const close = event => {
       if (event.key === 'Escape' || (menu.current?.open && !menu.current.contains(event.target))) menu.current?.removeAttribute('open');
@@ -149,13 +152,13 @@ export default function Work({
     setDebugOpen(true);
     if (!debugReport && !debugBusy) analyze();
   };
-  const summary = snapshot?.conversation?.filter(turn => turn.role === 'assistant').at(-1) ?? null;
+  const summary = snapshot?.conversation?.filter(turn => turn.role === 'assistant' && !turn.superseded).at(-1) ?? null;
   const runModel = { ...view, projectId, attachments: snapshot?.meta?.attachments ?? [], contextAssets: snapshot?.meta?.contextAssets ?? {}, summary: summary?.text ?? null, input: snapshot?.meta?.userMessage ?? snapshot?.prompt ?? '' };
   const history = <ChatHistory runs={runs} activeRunId={runId} onOpenRun={onOpenRun} onNewChat={onNewChat} onOpenHistory={onOpenHistory}/>;
   if (!stack) return <div className="v2-work" data-v2>{history}<section className="work-surface">{composer}<p className="muted work-empty">Choose a workflow and send a message to start.</p></section></div>;
   return <div className="v2-work work-run-mode" data-v2>{history}<section className="work-surface" {...replyComposer.dropProps}><header className="work-run-head">
     <div className="work-run-title"><span className="section-label">{view.running ? 'Running workflow' : 'Workflow run'}</span><h1>{stack.name ?? stack.id}</h1></div>
-    <RunActions onRetryCleanup={onRetryCleanup} view={view} onPauseRun={onPauseRun} onResumeRun={onResumeRun} onStopRun={onStopRun} onOpenFlow={onOpenFlow} onOpenDebug={openDebug}
+    <RunActions onRetryCleanup={onRetryCleanup} view={view} interaction={interaction} onPauseRun={onPauseRun} onResumeRun={onResumeRun} onStopRun={onStopRun} onOpenFlow={onOpenFlow} onOpenDebug={openDebug}
       pauseBusy={pauseBusy} resumeBusy={resumeBusy} stopBusy={stopBusy}/></header>
     {controlError && <p className="work-error" role="alert">{controlError}</p>}
     {view.error && <section className="work-failure" role="alert">
@@ -167,10 +170,11 @@ export default function Work({
         <button type="button" onClick={onRevealDiagnosticLog}>Show app log</button>
       </div>{retryError && <small>{retryError}</small>}
     </section>}
-    {summary?.degraded && <p className="work-warning" role="status"><strong>Post-run conversation summary degraded.</strong> This happened after the workflow settled and did not cause its failure{summary.reason ? `: ${summary.reason}` : '.'}</p>}
+    {summary?.degraded && <details className="work-summary-notice"><summary>Optional recap unavailable. The workflow result is retained.</summary>{summary.reason && <p>{summary.reason}</p>}</details>}
     <div className="work-run-grid"><main className="work-run-main">
-      <BlockEditor stack={stack} blocks={blocks} mode="run" run={runModel}/>
       <Interaction interaction={interaction} onDecide={onDecide} onAnswer={onAnswer} projectId={projectId} assets={runModel.contextAssets[interaction?.blockId] ?? []}/>
+      <RepoChanges projectId={projectId} runId={runId} running={view.running || view.lifecycle?.cleanup === 'running'}/>
+      <BlockEditor stack={stack} blocks={blocks} mode="run" run={runModel}/>
       {!interaction && <AssetComposer projectId={projectId} draftKey={`reply:${projectId}:${runId}`} onSubmit={onReply} busy={replyBusy || view.running || view.resumable || view.stopping} placeholder="Continue this conversation…"/>}
     </main></div>
     {debugOpen && <DebugPanel runId={runId} trace={trace} view={view} report={debugReport} busy={debugBusy} error={debugError}

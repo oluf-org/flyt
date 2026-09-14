@@ -172,7 +172,13 @@ function gitOut(args, cwd, { trim = true } = {}) {
 }
 
 const isGitRepo = root => {
-  try { gitOut(['rev-parse', '--git-dir'], root); return true; } catch { return false; }
+  try {
+    // A project can be bound below an enclosing repository, including inside
+    // an ignored directory. Parent-relative Git paths cannot describe effects
+    // in that bound project; use its bounded file scan instead.
+    const top = gitOut(['rev-parse', '--show-toplevel'], root);
+    return fs.realpathSync(top) === fs.realpathSync(root);
+  } catch { return false; }
 };
 
 // Porcelain v1 entries, as { path, code }. `--porcelain` already excludes

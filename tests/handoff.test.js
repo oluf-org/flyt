@@ -101,7 +101,8 @@ async function bootHandoff(root, workspace) {
           const session = await kernel.ctx.sessions.open(execution.runId);
           await session.append({
             type: 'workspace.observed',
-            data: { changed: true, kind: 'test-workspace', tool: 'write_file' },
+            data: { changed: true, changedSinceCall: true, blockId: execution.blockId,
+              callId: execution.call.id, kind: 'test-workspace', tool: 'write_file' },
           });
           return { content: `wrote ${args.path}` };
         },

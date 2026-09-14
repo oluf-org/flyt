@@ -135,13 +135,65 @@ jobs:
         run: npx electron-builder ${{ matrix.build_args }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      - name: Install release uploader
-        if: startsWith(github.ref, 'refs/tags/')
-        run: npm ci --omit=dev --prefix services/updates
+      - name: Preserve verified installers
+        uses: actions/upload-artifact@v7
+        with:
+          name: flyt-${{ matrix.platform }}
+          path: |
+            release/*
+            !release/*-unpacked/**
+            !release/*.tmp/**
+            !release/mac*/**
+            !release/builder-debug.yml
+            !release/builder-effective-config.yaml
+          retention-days: 14
+          if-no-files-found: error
+
+  # GitHub downloads must remain available even when R2 credentials or channel
+  # activation fail. Both destinations use the same tested installer bytes.
+  github-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: flyt-*
+          path: release
+          merge-multiple: true
+      - name: Publish complete GitHub release
+        run: node scripts/publish-github-release.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  upload-r2:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows, mac, linux]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v8
+        with:
+          name: flyt-${{ matrix.platform }}
+          path: release
+      - run: npm ci --omit=dev --prefix services/updates
       # Uploads remain private until the final activation job succeeds.
       - name: Upload and verify immutable R2 assets
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: bash
         env:
           R2_ENDPOINT: ${{ vars.R2_ENDPOINT }}
           R2_BUCKET_NAME: ${{ vars.R2_BUCKET_NAME }}
@@ -152,25 +204,12 @@ jobs:
           node services/updates/scripts/release.mjs upload --directory release \
             --version "${GITHUB_REF_NAME#v}" --platform "$RELEASE_PLATFORM" \
             --commit "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID"
-      - name: Upload artifacts for an untagged manual build
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: flyt-${{ matrix.os }}
-          path: |
-            release/*
-            !release/*-unpacked/**
-            !release/*.tmp/**
-            !release/mac*/**
-            !release/builder-debug.yml
-            !release/builder-effective-config.yaml
-          retention-days: 14
 
   # All platforms must be uploaded, hash-verified and from this run before beta
   # changes. Stable promotion is a separate manually dispatched workflow.
   publish:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: upload-r2
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     concurrency:

@@ -5,6 +5,8 @@
 // can hold without mounting React, and the component is then only arrangement.
 
 /** "3 days ago", or nothing at all rather than a fabricated date. */
+import { recommendedWorkflowOrder } from '../defaultWorkflows.js';
+
 export function changedLabel(iso, now = Date.now()) {
   const at = iso ? Date.parse(iso) : NaN;
   if (!Number.isFinite(at)) return '';
@@ -35,6 +37,8 @@ export function galleryRows(stacks = [], query = '') {
     return haystack.includes(needle);
   });
   return [...matches].sort((a, b) => {
+    const recommendation = recommendedWorkflowOrder(a, b);
+    if (recommendation) return recommendation;
     const left = Date.parse(a.updatedAt ?? '') || 0;
     const right = Date.parse(b.updatedAt ?? '') || 0;
     if (left !== right) return right - left;

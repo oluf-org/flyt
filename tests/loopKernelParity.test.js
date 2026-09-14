@@ -12,6 +12,7 @@ import { createApi } from '../core/api.js';
 import { registerProvider } from '../core/adapters/index.js';
 import { git } from '../core/worktree.js';
 import { waitFor } from './helpers.js';
+import { applyPatch } from '../src/loopLive.js';
 import {
   bootRunKernel, resumeStackRun, startStackRun, stopStackRun,
 } from '../core/kernelHost.js';
@@ -342,12 +343,22 @@ test('kernel session activity uses the existing live and incremental run channel
   });
   await enteredSecond;
 
-  const liveUpdate = await waitFor(() => events.find(event => (
-    event.type === 'run:update' && event.payload.runId === runId
-    && event.payload.full?.retrospectives?.work?.toolCalls?.length === 1
-  )), { label: 'live canonical kernel update' });
-  assert.equal(liveUpdate.payload.full.meta.stage, 'execution');
-  assert.equal(liveUpdate.payload.full.meta.nodeStatus.work, 'active');
+  // File observation can let the initial full snapshot arrive before the tool
+  // finishes. Exercise the same full + patch protocol as the renderer, rather
+  // than requiring the first coalesced snapshot to already contain its result.
+  let cursor = 0, heldView = null;
+  const liveView = await waitFor(() => {
+    for (const event of events.slice(cursor)) {
+      if (event.type !== 'run:update' || event.payload.runId !== runId) continue;
+      if (!event.payload.full && !event.payload.patch) continue; // legacy invalidation notice
+      heldView = applyPatch(heldView, event.payload);
+      assert.equal(heldView.refetch, false, 'the incremental channel must preserve revision continuity');
+    }
+    cursor = events.length;
+    return heldView?.snapshot?.retrospectives?.work?.toolCalls?.length === 1 ? heldView.snapshot : null;
+  }, { label: 'live canonical kernel update' });
+  assert.equal(liveView.meta.stage, 'execution');
+  assert.equal(liveView.meta.nodeStatus.work, 'active');
   assert.deepEqual(await api.invoke('run:live', { projectId }), { [projectId]: [runId] });
   assert.ok(events.some(event => event.type === 'project:activity'
     && event.payload.projectId === projectId && event.payload.live.includes(runId)));

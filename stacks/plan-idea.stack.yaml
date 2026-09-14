@@ -1,0 +1,14 @@
+version: 2
+id: plan-idea
+name: Plan an idea
+description: Turn an idea into a grounded specification, acceptance criteria, and practical milestones.
+launchable: true
+blocks:
+  - id: specify
+    use: flyt-blocks-delivery:plan-idea
+    title: Clarify and specify
+    config:
+      modelTier: standard
+      maxCalls: 40
+      maxMinutes: 20
+      hardMaxSteps: 35

@@ -1,0 +1,10 @@
+version: 2
+id: improve-dispatch-planning
+name: "improve-dispatch-planning"
+blocks:
+  - id: improve
+    use: flyt-blocks-core:general-analysis
+    config:
+      maxTokens: 8192
+      systemPrompt: "Revise reusable supplemental task-graph planning guidance using the fixed objective and actual development feedback. Return exactly one JSON object {\"candidate\":{\"text\":\"complete guidance under 250 words\"},\"findings\":[\"one concise evidence-based rationale\"]}. Do not return a task graph. Do not simulate subsequent iterations. Do not claim your candidate passed evaluation. Keep the block invariant safety contract intact."
+      instructions: "Improve the best available candidate or begin from the production invariant guidance. Explicitly distinguish independent deliverables from necessary consolidation. Require self-contained worker goals with source facts and observable acceptance checks. Only add dependencies for actual required outputs or write conflicts. Keep guidance short and do not overfit the development cases.\n\nObserved development baseline: all four planning trials required a repair. Static diagnostics showed requires containing facts already in the user brief, with no producer task. In this block, requires is ONLY for named outputs produced by another task in the graph. Supplied facts and existing workspace evidence belong in goal text, not requires. Independent roots use dependsOn:[] and requires:[]. A consolidation uses matching produces/requires names and actual predecessor IDs. Incorporate this general contract clarification into the reusable prompt and evaluate the complete candidate. This is measured development feedback, not evidence that a new prompt passed."

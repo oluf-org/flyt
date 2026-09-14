@@ -16,6 +16,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { projectAssets, draftAssets, chatSubmission } from './assets.js';
 import path from 'node:path';
 import { bounded } from './executionOwnership.js';
+import { readRepoChanges } from './repoChanges.js';
+import { recommendedWorkflowOrder, workflowRecommendation } from '../src/defaultWorkflows.js';
 import { Workspace } from './workspace.js';
 import { landTask, verifyTask } from './landing.js';
 import { correctionFields } from './repair.js';
@@ -381,6 +383,7 @@ export function createApi(engine) {
   const appendWorkflowSummary = async (entry, host, runId) => {
     if (runtimeConfig.supervisor?.terminalSummary === false) return null;
     const before = await snapshotStackRun(host.ctx, runId, host.kernelModule);
+    if (before.meta?.supervisorSummary === false) return null;
     const summary = await summarizeWorkflowRun({
       snapshot: before,
       workflowName: before.meta?.stackId ?? null,
@@ -399,7 +402,7 @@ export function createApi(engine) {
     });
     if (summary.degraded) {
       engine.emitWorkflow?.(entry.id, {
-        kind: 'warning', runId,
+        kind: 'warning', runId, code: 'optional_summary_unavailable',
         message: `The conversation supervisor used its deterministic fallback${summary.reason ? `: ${summary.reason}` : '.'}`,
       });
     }
@@ -1055,7 +1058,7 @@ export function createApi(engine) {
             });
           const fallbackPreset = kernel.defaultPresetId(stack);
           return [{
-            id: stack.id, name: stack.name, description: stack.description,
+            id: stack.id, name: stack.name, description: stack.description, recommendation: workflowRecommendation(stack.id),
             presets: Object.entries(stack.presets ?? {}).map(([id, preset]) => ({
               id, name: preset.name, description: preset.description,
               // The chat picker preselects this one, and the runner applies it
@@ -1074,7 +1077,7 @@ export function createApi(engine) {
             steps,
           }];
         } catch { return []; }
-      });
+      }).sort(recommendedWorkflowOrder);
     },
 
     'asset:import': async ({ projectId = null, draftId = null, name, base64 }) => {
@@ -1354,6 +1357,7 @@ export function createApi(engine) {
       const selected = new Set(runIds);
       return readWorker.request('blockHistory', { root: store.rootDir, runIds: summaries.filter(row => selected.has(row.id)) }, { signal });
     },
+    'run:changes': ({ projectId, runId }) => readRepoChanges(proj(projectId).store, runId),
     'run:log': ({ projectId, runId }) => {
       const store = proj(projectId).store;
       const retired = store.runRetirement(runId);
@@ -1469,7 +1473,9 @@ export function createApi(engine) {
       if (goalId) { await goals.start({ projectId, goalId }); return { ok: true, runId, goalId }; }
       const legacy = legacyControl(entry, runId);
       if (legacy) return legacy;
-      const result = await runController.resume({ projectId, runId });
+      const result = await runController.resume({ projectId, runId,
+        afterSettled: (_outcome, record) => appendWorkflowSummary(entry, record.host, record.runId),
+      });
       return { ok: true, runId, ...(result.control ?? {}) };
     },
     'run:stop': async ({ projectId, runId, reason = 'stopped by request' }) => {
@@ -1507,6 +1513,7 @@ export function createApi(engine) {
       if (legacy) return legacy;
       await runController.restartBlock({
         projectId, runId, blockId, guidance: String(guidance ?? ''), worker: worker?.model ? worker : null,
+        afterSettled: (_outcome, record) => appendWorkflowSummary(entry, record.host, record.runId),
       });
       return { ok: true, runId, blockId };
     },

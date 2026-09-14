@@ -1,0 +1,1683 @@
+{
+  "id": "f251b00a-911d-4be2-bbcc-867ac2a80246",
+  "projectId": "D:\\electron\\llm-flow",
+  "name": "Plan & dispatch — GLM 5.3 Flash performance",
+  "createdAt": "2026-09-12T13:38:22.852Z",
+  "contract": {
+    "version": 2,
+    "evaluation": {
+      "version": 1,
+      "target": "task-graph",
+      "targetConfig": {
+        "minTasks": 1,
+        "maxTasks": 6,
+        "parallelism": "high"
+      },
+      "baseline": {
+        "text": "Follow the task-graph block invariant guidance.",
+        "provenance": {
+          "kind": "Production planner with neutral supplemental instruction"
+        }
+      },
+      "suite": {
+        "id": "plan-dispatch-performance",
+        "version": 1,
+        "name": "Concurrency and executable output coverage",
+        "evaluators": [
+          {
+            "id": "block-contract",
+            "version": 1,
+            "name": "contract",
+            "mandatory": true,
+            "config": {
+              "block": "task-graph",
+              "options": {
+                "readOnly": true
+              }
+            }
+          },
+          {
+            "id": "runtime",
+            "version": 1,
+            "name": "runtime",
+            "mandatory": false,
+            "config": {}
+          },
+          {
+            "id": "ai-rubric",
+            "version": 1,
+            "name": "quality",
+            "mandatory": true,
+            "config": {
+              "model": "z-ai/glm-5.3-flash",
+              "repairs": 1,
+              "rubric": "Evaluate executable planning quality, not self-claims. Full marks require all requested facts and checks to reach the right worker; edges must reflect real input requirements. Penalize missing coverage, duplicate effort, serial busywork, and unsafe implied parallel writes. Do not reward verbosity or number of tasks.",
+              "dimensions": [
+                {
+                  "id": "coverage",
+                  "description": "Self-contained goals preserve each requested deliverable, source facts, constraints, and observable verification.",
+                  "mandatory": true,
+                  "minimum": 3
+                },
+                {
+                  "id": "parallelism",
+                  "description": "Independent work can overlap; true prerequisite outputs are produced and required; no redundant stages.",
+                  "mandatory": true,
+                  "minimum": 3
+                }
+              ]
+            }
+          }
+        ],
+        "cases": [
+          {
+            "id": "independent-reports",
+            "split": "development",
+            "repeats": 2,
+            "input": "Read-only benchmark using only the facts in this request. Produce exactly three independent worker answers, each covering its own numbered work package. Do not write files, use tools, or add a coordinator. Each worker verifies its own arithmetic and quotes the input values it used.\n1. INVENTORY: apples=12, pears=0, plums=8. Report TOTAL=20, preserve the zero stock item, and name pears as out of stock.\n2. LATENCY: before=240 ms, after=150 ms. Report REDUCTION=37.5% with (240-150)/240*100, and state these two numbers alone do not establish statistical significance.\n3. RELEASE: API work=2 days, UI work=3 days, run concurrently from day 1; QA=1 day after both, release=day 5. Report QA=day 4, RELEASE=day 5, and one rollback verification check. This is an analysis work package, not instructions to split more workers.\nReturn each result in no more than 130 words. Preserve all requested outputs. No invented measurements.",
+            "requirements": "Three independent self-verifying read-only work packages; no coordination dependency.",
+            "evaluators": [
+              {
+                "id": "json-schema",
+                "version": 1,
+                "name": "independent",
+                "mandatory": true,
+                "config": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "tasks": {
+                        "type": "array",
+                        "minItems": 3,
+                        "maxItems": 3,
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "dependsOn": {
+                              "type": "array",
+                              "maxItems": 0
+                            },
+                            "writeFiles": {
+                              "type": "array",
+                              "maxItems": 0
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "id": "required-consolidation",
+            "split": "development",
+            "repeats": 2,
+            "input": "Read-only, no tools. Produce three worker deliverables: (1) analyze import validation using facts: reject corrupt JSON, preserve unknown fields, support version 1; (2) independently analyze recovery using facts: backup before replacing data, atomic writes, restore on failure; (3) produce one acceptance checklist using BOTH finished analyses. First two tasks must run independently; final checklist requires both outputs. Each analysis verifies its own coverage. Do not write files.",
+            "requirements": "Exactly two independent analyses and one consolidation requiring both artifacts; all facts and observable checks survive.",
+            "evaluators": [
+              {
+                "id": "json-schema",
+                "version": 1,
+                "name": "merge-dependencies",
+                "mandatory": true,
+                "config": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "tasks": {
+                        "type": "array",
+                        "minItems": 3,
+                        "maxItems": 3,
+                        "contains": {
+                          "type": "object",
+                          "properties": {
+                            "dependsOn": {
+                              "type": "array",
+                              "minItems": 2
+                            },
+                            "requires": {
+                              "type": "array",
+                              "minItems": 2
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "id": "held-out-independent",
+            "split": "held-out",
+            "repeats": 2,
+            "input": "Read-only no tools. Give exactly three independent, self-verifying work packages with final answers: calculate solar panel totals from east=7 west=5; calculate water use reduction from 80 liters to 60 liters and explain sampling limitations; plan independent paint=2 days and plumbing=4 days followed by 1 inspection day, completion by day 6. No coordinator, files, or shared outputs.",
+            "requirements": "Three independent complete goals with arithmetic, limitations and schedule checks.",
+            "evaluators": [
+              {
+                "id": "json-schema",
+                "version": 1,
+                "name": "held-out-independent",
+                "mandatory": true,
+                "config": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "tasks": {
+                        "type": "array",
+                        "minItems": 3,
+                        "maxItems": 3,
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "dependsOn": {
+                              "type": "array",
+                              "maxItems": 0
+                            },
+                            "writeFiles": {
+                              "type": "array",
+                              "maxItems": 0
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "ranking": {
+        "primary": "gateRate",
+        "tieBreakers": [
+          "runtime.tokens",
+          "runtime.latencyMs"
+        ],
+        "minImprovement": 0
+      },
+      "targetThreshold": {
+        "metric": "runtime.latencyMs",
+        "value": 6000,
+        "direction": "lower"
+      },
+      "finalVerification": {
+        "required": true
+      },
+      "promotion": {
+        "mode": "off",
+        "limit": 0,
+        "confirmation": "fresh-evaluation"
+      }
+    },
+    "evaluationPolicy": "robust-v1",
+    "objective": "Improve supplemental Plan & dispatch planner guidance for efficient parallel work and complete, verifiable outputs. Produce the complete reusable prompt as candidate.text. Optimize against development feedback; the runtime evaluates actual production planning calls. Full dispatch latency is measured separately and must not be claimed from planner-only results.",
+    "constraints": "Keep task coverage, hard dependencies, artifact handoffs and declared write conflicts correct. Avoid unnecessary sequential phases and redundant workers. Never claim timings or passing checks yourself. Do not embed benchmark-specific answers, IDs or domain facts in the reusable prompt. No tools or changes to project code.",
+    "criteria": [],
+    "tests": [],
+    "requiredPaths": [],
+    "folder": "D:\\electron\\llm-flow",
+    "folderIdentity": {
+      "path": "D:\\electron\\llm-flow",
+      "dev": 2886149748,
+      "ino": 3940649674245748,
+      "birthtimeMs": 1783625244293.948
+    },
+    "folderMode": "focus",
+    "createFolder": false,
+    "limits": {
+      "iterations": 3,
+      "calls": 50,
+      "minutes": 25,
+      "usd": 2
+    },
+    "maxParallel": 3,
+    "plateau": 3,
+    "selfRedesign": false,
+    "reviewAi": true,
+    "reviewResults": false,
+    "authoringId": "14e16af0-f1ca-4b23-a76c-20293a386d70",
+    "tools": [],
+    "worker": {
+      "provider": "openrouter",
+      "model": "z-ai/glm-5.3-flash"
+    }
+  },
+  "status": "limit_reached",
+  "reason": "Iteration limit reached; best artifact retained",
+  "definition": {
+    "setup": null,
+    "recipe": "version: 2\nid: improve-dispatch-planning\nname: \"improve-dispatch-planning\"\nblocks:\n  - id: improve\n    use: flyt-blocks-core:general-analysis\n    config:\n      maxTokens: 8192\n      systemPrompt: \"Revise reusable supplemental task-graph planning guidance using the fixed objective and actual development feedback. Return exactly one JSON object {\\\"candidate\\\":{\\\"text\\\":\\\"complete guidance under 250 words\\\"},\\\"findings\\\":[\\\"one concise evidence-based rationale\\\"]}. Do not return a task graph. Do not simulate subsequent iterations. Do not claim your candidate passed evaluation. Keep the block invariant safety contract intact.\"\n      instructions: \"Improve the best available candidate or begin from the production invariant guidance. Explicitly distinguish independent deliverables from necessary consolidation. Require self-contained worker goals with source facts and observable acceptance checks. Only add dependencies for actual required outputs or write conflicts. Keep guidance short and do not overfit the development cases.\"\n"
+  },
+  "activeRevision": 2,
+  "pendingRevision": null,
+  "revisionCount": 2,
+  "iteration": 3,
+  "setupDone": true,
+  "workspace": {
+    "path": "D:\\electron\\llm-flow",
+    "dev": 2886149748,
+    "ino": 3940649674245748,
+    "birthtimeMs": 1783625244293.948
+  },
+  "activeChild": null,
+  "calls": 46,
+  "knownUsd": 0.05079294534999999,
+  "unknownCostCalls": 0,
+  "elapsedMs": 1406595,
+  "plateauCount": 0,
+  "best": {
+    "iteration": 2,
+    "revision": 2,
+    "score": null,
+    "runId": "goal-f251b00a-911d-4be2-bbcc-867ac2a80246-iteration-2",
+    "artifact": "iteration-2",
+    "preview": "Plan the fewest workers covering every requested deliverable; never split one work package. Independent deliverables are parallel roots: dependsOn:[] and requires:[]; no coordinators or sequential phases. Use requires only for a named output another task produces; supplied facts and workspace evidence stay in goal text. A consolidation depends on each actual predecessor and requires their artifacts via matching produces/requires names and real predecessor IDs.\n\nEvery worker goal is self-containe",
+    "verified": false,
+    "findings": [
+      "Four dev trials required repairs; requires held brief facts with no producer task, so that clarification is now explicit."
+    ],
+    "evaluation": {
+      "eligible": true,
+      "comparable": true,
+      "metrics": {
+        "gateRate": {
+          "value": 1,
+          "unit": "ratio",
+          "direction": "higher",
+          "samples": 12,
+          "aggregation": "rate"
+        },
+        "contract.rawFormat": {
+          "value": 1,
+          "unit": "ratio",
+          "direction": "higher",
+          "samples": 4,
+          "aggregation": "rate"
+        },
+        "runtime.latencyMs": {
+          "value": 15624,
+          "unit": "ms",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.tokens": {
+          "value": 1703.5,
+          "unit": "tokens",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.knownUsd": {
+          "value": 0.00038432250000000005,
+          "unit": "USD",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.repairs": {
+          "value": 0,
+          "unit": "count",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.fallbacks": {
+          "value": 0,
+          "unit": "count",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.unresolved": {
+          "value": 0,
+          "unit": "count",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "quality.coverage": {
+          "value": 3.75,
+          "unit": "subjective ordinal 0–4",
+          "direction": "higher",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "quality.parallelism": {
+          "value": 4,
+          "unit": "subjective ordinal 0–4",
+          "direction": "higher",
+          "samples": 4,
+          "aggregation": "mean"
+        }
+      },
+      "counts": {
+        "scheduled": 4,
+        "attempted": 4,
+        "responses": 4,
+        "completed": 4,
+        "errors": 0,
+        "cancelled": 0,
+        "firstSuccess": 4,
+        "repairs": 0,
+        "fallbacks": 0,
+        "unresolved": 0
+      },
+      "firstAttemptRate": 1,
+      "recoveryRate": 0,
+      "fallbackRate": 0,
+      "unresolvedRate": 0,
+      "comparison": "inconclusive",
+      "scope": "Observed finite suite and configured sample counts; no statistical or universal reliability claim",
+      "benchmarkVersion": "plan-dispatch-performance@1:6770e292c5fb3af3",
+      "suiteVersion": 1,
+      "split": "development",
+      "reportIds": [
+        "report-evaluation-candidate-2-1-independent-reports-0",
+        "report-evaluation-candidate-2-1-independent-reports-1",
+        "report-evaluation-candidate-2-1-required-consolidation-0",
+        "report-evaluation-candidate-2-1-required-consolidation-1"
+      ],
+      "model": {
+        "provider": "openrouter",
+        "model": "z-ai/glm-5.3-flash"
+      },
+      "configDigest": "51e60efe0794ddf3858876206a30f1ff4af0a795ee2f19606bc6dd2a62778eab",
+      "candidateDigest": "3686ac85f6f370d550d042fd81c49af698319ebf09c09a8256f2594e97c5a007",
+      "feedback": [
+        {
+          "caseId": "independent-reports",
+          "status": "pass",
+          "checks": []
+        },
+        {
+          "caseId": "independent-reports",
+          "status": "pass",
+          "checks": []
+        },
+        {
+          "caseId": "required-consolidation",
+          "status": "pass",
+          "checks": []
+        },
+        {
+          "caseId": "required-consolidation",
+          "status": "pass",
+          "checks": []
+        }
+      ]
+    },
+    "eligible": true,
+    "finalVerification": null
+  },
+  "current": {
+    "iteration": 3,
+    "revision": 2,
+    "score": null,
+    "runId": "goal-f251b00a-911d-4be2-bbcc-867ac2a80246-iteration-3",
+    "artifact": "iteration-3",
+    "preview": "Plan the fewest workers covering every requested deliverable; never split one work package. Independent deliverables are parallel roots: dependsOn:[] and requires:[]; no coordinators or sequential phases. requires names only outputs another task in the graph produces; supplied facts and workspace evidence belong in goal text, never requires. A consolidation depends on each actual predecessor and requires their artifacts via matching produces/requires names and real predecessor IDs.\n\nEvery worker",
+    "verified": false,
+    "findings": [
+      "Base passed all four dev trials first-attempt; revision adds only the requires-producer rule."
+    ],
+    "evaluation": {
+      "eligible": false,
+      "comparable": false,
+      "metrics": {
+        "gateRate": {
+          "value": 0.8333333333333334,
+          "unit": "ratio",
+          "direction": "higher",
+          "samples": 12,
+          "aggregation": "rate"
+        },
+        "contract.rawFormat": {
+          "value": 1,
+          "unit": "ratio",
+          "direction": "higher",
+          "samples": 4,
+          "aggregation": "rate"
+        },
+        "runtime.latencyMs": {
+          "value": 22346.75,
+          "unit": "ms",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.tokens": {
+          "value": 1951,
+          "unit": "tokens",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.knownUsd": {
+          "value": 0.0005173375,
+          "unit": "USD",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.repairs": {
+          "value": 0,
+          "unit": "count",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.fallbacks": {
+          "value": 0,
+          "unit": "count",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.unresolved": {
+          "value": 0,
+          "unit": "count",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "quality.coverage": {
+          "value": null,
+          "unavailable": "Not measured by canonical execution",
+          "unit": "subjective ordinal 0–4",
+          "direction": "higher",
+          "samples": 2,
+          "aggregation": "mean"
+        },
+        "quality.parallelism": {
+          "value": null,
+          "unavailable": "Not measured by canonical execution",
+          "unit": "subjective ordinal 0–4",
+          "direction": "higher",
+          "samples": 2,
+          "aggregation": "mean"
+        }
+      },
+      "counts": {
+        "scheduled": 4,
+        "attempted": 4,
+        "responses": 4,
+        "completed": 4,
+        "errors": 2,
+        "cancelled": 0,
+        "firstSuccess": 4,
+        "repairs": 0,
+        "fallbacks": 0,
+        "unresolved": 0
+      },
+      "firstAttemptRate": 1,
+      "recoveryRate": 0,
+      "fallbackRate": 0,
+      "unresolvedRate": 0,
+      "comparison": "inconclusive",
+      "scope": "Observed finite suite and configured sample counts; no statistical or universal reliability claim",
+      "benchmarkVersion": "plan-dispatch-performance@1:6770e292c5fb3af3",
+      "suiteVersion": 1,
+      "split": "development",
+      "reportIds": [
+        "report-evaluation-candidate-3-1-independent-reports-0",
+        "report-evaluation-candidate-3-1-independent-reports-1",
+        "report-evaluation-candidate-3-1-required-consolidation-0",
+        "report-evaluation-candidate-3-1-required-consolidation-1"
+      ],
+      "model": {
+        "provider": "openrouter",
+        "model": "z-ai/glm-5.3-flash"
+      },
+      "configDigest": "51e60efe0794ddf3858876206a30f1ff4af0a795ee2f19606bc6dd2a62778eab",
+      "candidateDigest": "5673cef77b00209a915d93fa2774401cab06c5f6c6f9d422a5d0ad2428f25bf0",
+      "feedback": [
+        {
+          "caseId": "independent-reports",
+          "status": "error",
+          "checks": [
+            {
+              "name": "quality",
+              "status": "error",
+              "code": "evaluator_error",
+              "explanation": "Missing verifiable artifact citation"
+            }
+          ]
+        },
+        {
+          "caseId": "independent-reports",
+          "status": "error",
+          "checks": [
+            {
+              "name": "quality",
+              "status": "error",
+              "code": "evaluator_error",
+              "explanation": "Missing verifiable artifact citation"
+            }
+          ]
+        },
+        {
+          "caseId": "required-consolidation",
+          "status": "pass",
+          "checks": []
+        },
+        {
+          "caseId": "required-consolidation",
+          "status": "pass",
+          "checks": []
+        }
+      ]
+    },
+    "eligible": false,
+    "finalVerification": null
+  },
+  "memory": [
+    {
+      "text": "Dev cases contrast independent packages with a checklist requiring both analyses; guidance encodes that split-versus-consolidate distinction without embedding case facts.",
+      "iteration": 1,
+      "source": "goal-f251b00a-911d-4be2-bbcc-867ac2a80246-iteration-1",
+      "status": "hypothesis"
+    },
+    {
+      "text": "Four dev trials required repairs; requires held brief facts with no producer task, so that clarification is now explicit.",
+      "iteration": 2,
+      "source": "goal-f251b00a-911d-4be2-bbcc-867ac2a80246-iteration-2",
+      "status": "hypothesis"
+    },
+    {
+      "text": "Base passed all four dev trials first-attempt; revision adds only the requires-producer rule.",
+      "iteration": 3,
+      "source": "goal-f251b00a-911d-4be2-bbcc-867ac2a80246-iteration-3",
+      "status": "hypothesis"
+    }
+  ],
+  "history": [
+    {
+      "iteration": 1,
+      "revision": 1,
+      "score": null,
+      "runId": "goal-f251b00a-911d-4be2-bbcc-867ac2a80246-iteration-1",
+      "artifact": "iteration-1",
+      "preview": "Plan the fewest workers covering every requested deliverable; do not split a single work package further. Independent deliverables run as parallel workers with no dependencies between them; no coordinators or sequential phases. Consolidation differs: a deliverable combining other tasks' finished outputs depends on each input artifact and runs after them.\n\nMake every worker goal self-contained: include its source facts, exact outputs to preserve, and observable acceptance checks the worker verifi",
+      "verified": false,
+      "findings": [
+        "Dev cases contrast independent packages with a checklist requiring both analyses; guidance encodes that split-versus-consolidate distinction without embedding case facts."
+      ],
+      "evaluation": {
+        "eligible": false,
+        "comparable": false,
+        "metrics": {
+          "gateRate": {
+            "value": 0.8333333333333334,
+            "unit": "ratio",
+            "direction": "higher",
+            "samples": 12,
+            "aggregation": "rate"
+          },
+          "contract.rawFormat": {
+            "value": 1,
+            "unit": "ratio",
+            "direction": "higher",
+            "samples": 4,
+            "aggregation": "rate"
+          },
+          "runtime.latencyMs": {
+            "value": 52108,
+            "unit": "ms",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.tokens": {
+            "value": 5107.25,
+            "unit": "tokens",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.knownUsd": {
+            "value": 0.0015608199999999999,
+            "unit": "USD",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.repairs": {
+            "value": 0.75,
+            "unit": "count",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.fallbacks": {
+            "value": 0,
+            "unit": "count",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.unresolved": {
+            "value": 0,
+            "unit": "count",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "quality.coverage": {
+            "value": null,
+            "unavailable": "Not measured by canonical execution",
+            "unit": "subjective ordinal 0–4",
+            "direction": "higher",
+            "samples": 2,
+            "aggregation": "mean"
+          },
+          "quality.parallelism": {
+            "value": null,
+            "unavailable": "Not measured by canonical execution",
+            "unit": "subjective ordinal 0–4",
+            "direction": "higher",
+            "samples": 2,
+            "aggregation": "mean"
+          }
+        },
+        "counts": {
+          "scheduled": 4,
+          "attempted": 4,
+          "responses": 4,
+          "completed": 4,
+          "errors": 2,
+          "cancelled": 0,
+          "firstSuccess": 1,
+          "repairs": 3,
+          "fallbacks": 0,
+          "unresolved": 0
+        },
+        "firstAttemptRate": 0.25,
+        "recoveryRate": 0.75,
+        "fallbackRate": 0,
+        "unresolvedRate": 0,
+        "comparison": "inconclusive",
+        "scope": "Observed finite suite and configured sample counts; no statistical or universal reliability claim",
+        "benchmarkVersion": "plan-dispatch-performance@1:6770e292c5fb3af3",
+        "suiteVersion": 1,
+        "split": "development",
+        "reportIds": [
+          "report-evaluation-candidate-1-1-independent-reports-0",
+          "report-evaluation-candidate-1-1-independent-reports-1",
+          "report-evaluation-candidate-1-1-required-consolidation-0",
+          "report-evaluation-candidate-1-1-required-consolidation-1"
+        ],
+        "model": {
+          "provider": "openrouter",
+          "model": "z-ai/glm-5.3-flash"
+        },
+        "configDigest": "51e60efe0794ddf3858876206a30f1ff4af0a795ee2f19606bc6dd2a62778eab",
+        "candidateDigest": "ebfe54785d328cd6d11cf64b2155eeff02782d0a40d8b4c33bd32514e159ef3f",
+        "feedback": [
+          {
+            "caseId": "independent-reports",
+            "status": "pass",
+            "checks": []
+          },
+          {
+            "caseId": "independent-reports",
+            "status": "error",
+            "checks": [
+              {
+                "name": "quality",
+                "status": "error",
+                "code": "evaluator_error",
+                "explanation": "Missing verifiable artifact citation"
+              }
+            ]
+          },
+          {
+            "caseId": "required-consolidation",
+            "status": "error",
+            "checks": [
+              {
+                "name": "quality",
+                "status": "error",
+                "code": "evaluator_error",
+                "explanation": "Missing verifiable artifact citation"
+              }
+            ]
+          },
+          {
+            "caseId": "required-consolidation",
+            "status": "pass",
+            "checks": []
+          }
+        ]
+      },
+      "eligible": false,
+      "finalVerification": null
+    },
+    {
+      "iteration": 2,
+      "revision": 2,
+      "score": null,
+      "runId": "goal-f251b00a-911d-4be2-bbcc-867ac2a80246-iteration-2",
+      "artifact": "iteration-2",
+      "preview": "Plan the fewest workers covering every requested deliverable; never split one work package. Independent deliverables are parallel roots: dependsOn:[] and requires:[]; no coordinators or sequential phases. Use requires only for a named output another task produces; supplied facts and workspace evidence stay in goal text. A consolidation depends on each actual predecessor and requires their artifacts via matching produces/requires names and real predecessor IDs.\n\nEvery worker goal is self-containe",
+      "verified": false,
+      "findings": [
+        "Four dev trials required repairs; requires held brief facts with no producer task, so that clarification is now explicit."
+      ],
+      "evaluation": {
+        "eligible": true,
+        "comparable": true,
+        "metrics": {
+          "gateRate": {
+            "value": 1,
+            "unit": "ratio",
+            "direction": "higher",
+            "samples": 12,
+            "aggregation": "rate"
+          },
+          "contract.rawFormat": {
+            "value": 1,
+            "unit": "ratio",
+            "direction": "higher",
+            "samples": 4,
+            "aggregation": "rate"
+          },
+          "runtime.latencyMs": {
+            "value": 15624,
+            "unit": "ms",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.tokens": {
+            "value": 1703.5,
+            "unit": "tokens",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.knownUsd": {
+            "value": 0.00038432250000000005,
+            "unit": "USD",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.repairs": {
+            "value": 0,
+            "unit": "count",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.fallbacks": {
+            "value": 0,
+            "unit": "count",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.unresolved": {
+            "value": 0,
+            "unit": "count",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "quality.coverage": {
+            "value": 3.75,
+            "unit": "subjective ordinal 0–4",
+            "direction": "higher",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "quality.parallelism": {
+            "value": 4,
+            "unit": "subjective ordinal 0–4",
+            "direction": "higher",
+            "samples": 4,
+            "aggregation": "mean"
+          }
+        },
+        "counts": {
+          "scheduled": 4,
+          "attempted": 4,
+          "responses": 4,
+          "completed": 4,
+          "errors": 0,
+          "cancelled": 0,
+          "firstSuccess": 4,
+          "repairs": 0,
+          "fallbacks": 0,
+          "unresolved": 0
+        },
+        "firstAttemptRate": 1,
+        "recoveryRate": 0,
+        "fallbackRate": 0,
+        "unresolvedRate": 0,
+        "comparison": "inconclusive",
+        "scope": "Observed finite suite and configured sample counts; no statistical or universal reliability claim",
+        "benchmarkVersion": "plan-dispatch-performance@1:6770e292c5fb3af3",
+        "suiteVersion": 1,
+        "split": "development",
+        "reportIds": [
+          "report-evaluation-candidate-2-1-independent-reports-0",
+          "report-evaluation-candidate-2-1-independent-reports-1",
+          "report-evaluation-candidate-2-1-required-consolidation-0",
+          "report-evaluation-candidate-2-1-required-consolidation-1"
+        ],
+        "model": {
+          "provider": "openrouter",
+          "model": "z-ai/glm-5.3-flash"
+        },
+        "configDigest": "51e60efe0794ddf3858876206a30f1ff4af0a795ee2f19606bc6dd2a62778eab",
+        "candidateDigest": "3686ac85f6f370d550d042fd81c49af698319ebf09c09a8256f2594e97c5a007",
+        "feedback": [
+          {
+            "caseId": "independent-reports",
+            "status": "pass",
+            "checks": []
+          },
+          {
+            "caseId": "independent-reports",
+            "status": "pass",
+            "checks": []
+          },
+          {
+            "caseId": "required-consolidation",
+            "status": "pass",
+            "checks": []
+          },
+          {
+            "caseId": "required-consolidation",
+            "status": "pass",
+            "checks": []
+          }
+        ]
+      },
+      "eligible": true,
+      "finalVerification": null
+    },
+    {
+      "iteration": 3,
+      "revision": 2,
+      "score": null,
+      "runId": "goal-f251b00a-911d-4be2-bbcc-867ac2a80246-iteration-3",
+      "artifact": "iteration-3",
+      "preview": "Plan the fewest workers covering every requested deliverable; never split one work package. Independent deliverables are parallel roots: dependsOn:[] and requires:[]; no coordinators or sequential phases. requires names only outputs another task in the graph produces; supplied facts and workspace evidence belong in goal text, never requires. A consolidation depends on each actual predecessor and requires their artifacts via matching produces/requires names and real predecessor IDs.\n\nEvery worker",
+      "verified": false,
+      "findings": [
+        "Base passed all four dev trials first-attempt; revision adds only the requires-producer rule."
+      ],
+      "evaluation": {
+        "eligible": false,
+        "comparable": false,
+        "metrics": {
+          "gateRate": {
+            "value": 0.8333333333333334,
+            "unit": "ratio",
+            "direction": "higher",
+            "samples": 12,
+            "aggregation": "rate"
+          },
+          "contract.rawFormat": {
+            "value": 1,
+            "unit": "ratio",
+            "direction": "higher",
+            "samples": 4,
+            "aggregation": "rate"
+          },
+          "runtime.latencyMs": {
+            "value": 22346.75,
+            "unit": "ms",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.tokens": {
+            "value": 1951,
+            "unit": "tokens",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.knownUsd": {
+            "value": 0.0005173375,
+            "unit": "USD",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.repairs": {
+            "value": 0,
+            "unit": "count",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.fallbacks": {
+            "value": 0,
+            "unit": "count",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "runtime.unresolved": {
+            "value": 0,
+            "unit": "count",
+            "direction": "lower",
+            "samples": 4,
+            "aggregation": "mean"
+          },
+          "quality.coverage": {
+            "value": null,
+            "unavailable": "Not measured by canonical execution",
+            "unit": "subjective ordinal 0–4",
+            "direction": "higher",
+            "samples": 2,
+            "aggregation": "mean"
+          },
+          "quality.parallelism": {
+            "value": null,
+            "unavailable": "Not measured by canonical execution",
+            "unit": "subjective ordinal 0–4",
+            "direction": "higher",
+            "samples": 2,
+            "aggregation": "mean"
+          }
+        },
+        "counts": {
+          "scheduled": 4,
+          "attempted": 4,
+          "responses": 4,
+          "completed": 4,
+          "errors": 2,
+          "cancelled": 0,
+          "firstSuccess": 4,
+          "repairs": 0,
+          "fallbacks": 0,
+          "unresolved": 0
+        },
+        "firstAttemptRate": 1,
+        "recoveryRate": 0,
+        "fallbackRate": 0,
+        "unresolvedRate": 0,
+        "comparison": "inconclusive",
+        "scope": "Observed finite suite and configured sample counts; no statistical or universal reliability claim",
+        "benchmarkVersion": "plan-dispatch-performance@1:6770e292c5fb3af3",
+        "suiteVersion": 1,
+        "split": "development",
+        "reportIds": [
+          "report-evaluation-candidate-3-1-independent-reports-0",
+          "report-evaluation-candidate-3-1-independent-reports-1",
+          "report-evaluation-candidate-3-1-required-consolidation-0",
+          "report-evaluation-candidate-3-1-required-consolidation-1"
+        ],
+        "model": {
+          "provider": "openrouter",
+          "model": "z-ai/glm-5.3-flash"
+        },
+        "configDigest": "51e60efe0794ddf3858876206a30f1ff4af0a795ee2f19606bc6dd2a62778eab",
+        "candidateDigest": "5673cef77b00209a915d93fa2774401cab06c5f6c6f9d422a5d0ad2428f25bf0",
+        "feedback": [
+          {
+            "caseId": "independent-reports",
+            "status": "error",
+            "checks": [
+              {
+                "name": "quality",
+                "status": "error",
+                "code": "evaluator_error",
+                "explanation": "Missing verifiable artifact citation"
+              }
+            ]
+          },
+          {
+            "caseId": "independent-reports",
+            "status": "error",
+            "checks": [
+              {
+                "name": "quality",
+                "status": "error",
+                "code": "evaluator_error",
+                "explanation": "Missing verifiable artifact citation"
+              }
+            ]
+          },
+          {
+            "caseId": "required-consolidation",
+            "status": "pass",
+            "checks": []
+          },
+          {
+            "caseId": "required-consolidation",
+            "status": "pass",
+            "checks": []
+          }
+        ]
+      },
+      "eligible": false,
+      "finalVerification": null
+    }
+  ],
+  "benchmark": {
+    "id": "plan-dispatch-performance",
+    "version": 1,
+    "name": "Concurrency and executable output coverage",
+    "evaluators": [
+      {
+        "id": "block-contract",
+        "version": 1,
+        "name": "contract",
+        "mandatory": true,
+        "config": {
+          "block": "task-graph",
+          "options": {
+            "readOnly": true
+          }
+        }
+      },
+      {
+        "id": "runtime",
+        "version": 1,
+        "name": "runtime",
+        "mandatory": false,
+        "config": {}
+      },
+      {
+        "id": "ai-rubric",
+        "version": 1,
+        "name": "quality",
+        "mandatory": true,
+        "config": {
+          "model": "z-ai/glm-5.3-flash",
+          "repairs": 1,
+          "rubric": "Evaluate executable planning quality, not self-claims. Full marks require all requested facts and checks to reach the right worker; edges must reflect real input requirements. Penalize missing coverage, duplicate effort, serial busywork, and unsafe implied parallel writes. Do not reward verbosity or number of tasks.",
+          "dimensions": [
+            {
+              "id": "coverage",
+              "description": "Self-contained goals preserve each requested deliverable, source facts, constraints, and observable verification.",
+              "mandatory": true,
+              "minimum": 3
+            },
+            {
+              "id": "parallelism",
+              "description": "Independent work can overlap; true prerequisite outputs are produced and required; no redundant stages.",
+              "mandatory": true,
+              "minimum": 3
+            }
+          ]
+        }
+      }
+    ],
+    "cases": [
+      {
+        "id": "independent-reports",
+        "split": "development",
+        "repeats": 2,
+        "input": "Read-only benchmark using only the facts in this request. Produce exactly three independent worker answers, each covering its own numbered work package. Do not write files, use tools, or add a coordinator. Each worker verifies its own arithmetic and quotes the input values it used.\n1. INVENTORY: apples=12, pears=0, plums=8. Report TOTAL=20, preserve the zero stock item, and name pears as out of stock.\n2. LATENCY: before=240 ms, after=150 ms. Report REDUCTION=37.5% with (240-150)/240*100, and state these two numbers alone do not establish statistical significance.\n3. RELEASE: API work=2 days, UI work=3 days, run concurrently from day 1; QA=1 day after both, release=day 5. Report QA=day 4, RELEASE=day 5, and one rollback verification check. This is an analysis work package, not instructions to split more workers.\nReturn each result in no more than 130 words. Preserve all requested outputs. No invented measurements.",
+        "requirements": "Three independent self-verifying read-only work packages; no coordination dependency.",
+        "evaluators": [
+          {
+            "id": "json-schema",
+            "version": 1,
+            "name": "independent",
+            "mandatory": true,
+            "config": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tasks": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "dependsOn": {
+                          "type": "array",
+                          "maxItems": 0
+                        },
+                        "writeFiles": {
+                          "type": "array",
+                          "maxItems": 0
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "required-consolidation",
+        "split": "development",
+        "repeats": 2,
+        "input": "Read-only, no tools. Produce three worker deliverables: (1) analyze import validation using facts: reject corrupt JSON, preserve unknown fields, support version 1; (2) independently analyze recovery using facts: backup before replacing data, atomic writes, restore on failure; (3) produce one acceptance checklist using BOTH finished analyses. First two tasks must run independently; final checklist requires both outputs. Each analysis verifies its own coverage. Do not write files.",
+        "requirements": "Exactly two independent analyses and one consolidation requiring both artifacts; all facts and observable checks survive.",
+        "evaluators": [
+          {
+            "id": "json-schema",
+            "version": 1,
+            "name": "merge-dependencies",
+            "mandatory": true,
+            "config": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tasks": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "contains": {
+                      "type": "object",
+                      "properties": {
+                        "dependsOn": {
+                          "type": "array",
+                          "minItems": 2
+                        },
+                        "requires": {
+                          "type": "array",
+                          "minItems": 2
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "held-out-independent",
+        "split": "held-out",
+        "repeats": 2,
+        "input": "Read-only no tools. Give exactly three independent, self-verifying work packages with final answers: calculate solar panel totals from east=7 west=5; calculate water use reduction from 80 liters to 60 liters and explain sampling limitations; plan independent paint=2 days and plumbing=4 days followed by 1 inspection day, completion by day 6. No coordinator, files, or shared outputs.",
+        "requirements": "Three independent complete goals with arithmetic, limitations and schedule checks.",
+        "evaluators": [
+          {
+            "id": "json-schema",
+            "version": 1,
+            "name": "held-out-independent",
+            "mandatory": true,
+            "config": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "tasks": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "dependsOn": {
+                          "type": "array",
+                          "maxItems": 0
+                        },
+                        "writeFiles": {
+                          "type": "array",
+                          "maxItems": 0
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "referenceRevision": 0,
+  "promotions": [],
+  "bestPartial": {
+    "iteration": 1,
+    "revision": 1,
+    "score": null,
+    "runId": "goal-f251b00a-911d-4be2-bbcc-867ac2a80246-iteration-1",
+    "artifact": "iteration-1",
+    "preview": "Plan the fewest workers covering every requested deliverable; do not split a single work package further. Independent deliverables run as parallel workers with no dependencies between them; no coordinators or sequential phases. Consolidation differs: a deliverable combining other tasks' finished outputs depends on each input artifact and runs after them.\n\nMake every worker goal self-contained: include its source facts, exact outputs to preserve, and observable acceptance checks the worker verifi",
+    "verified": false,
+    "findings": [
+      "Dev cases contrast independent packages with a checklist requiring both analyses; guidance encodes that split-versus-consolidate distinction without embedding case facts."
+    ],
+    "evaluation": {
+      "eligible": false,
+      "comparable": false,
+      "metrics": {
+        "gateRate": {
+          "value": 0.8333333333333334,
+          "unit": "ratio",
+          "direction": "higher",
+          "samples": 12,
+          "aggregation": "rate"
+        },
+        "contract.rawFormat": {
+          "value": 1,
+          "unit": "ratio",
+          "direction": "higher",
+          "samples": 4,
+          "aggregation": "rate"
+        },
+        "runtime.latencyMs": {
+          "value": 52108,
+          "unit": "ms",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.tokens": {
+          "value": 5107.25,
+          "unit": "tokens",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.knownUsd": {
+          "value": 0.0015608199999999999,
+          "unit": "USD",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.repairs": {
+          "value": 0.75,
+          "unit": "count",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.fallbacks": {
+          "value": 0,
+          "unit": "count",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.unresolved": {
+          "value": 0,
+          "unit": "count",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "quality.coverage": {
+          "value": null,
+          "unavailable": "Not measured by canonical execution",
+          "unit": "subjective ordinal 0–4",
+          "direction": "higher",
+          "samples": 2,
+          "aggregation": "mean"
+        },
+        "quality.parallelism": {
+          "value": null,
+          "unavailable": "Not measured by canonical execution",
+          "unit": "subjective ordinal 0–4",
+          "direction": "higher",
+          "samples": 2,
+          "aggregation": "mean"
+        }
+      },
+      "counts": {
+        "scheduled": 4,
+        "attempted": 4,
+        "responses": 4,
+        "completed": 4,
+        "errors": 2,
+        "cancelled": 0,
+        "firstSuccess": 1,
+        "repairs": 3,
+        "fallbacks": 0,
+        "unresolved": 0
+      },
+      "firstAttemptRate": 0.25,
+      "recoveryRate": 0.75,
+      "fallbackRate": 0,
+      "unresolvedRate": 0,
+      "comparison": "inconclusive",
+      "scope": "Observed finite suite and configured sample counts; no statistical or universal reliability claim",
+      "benchmarkVersion": "plan-dispatch-performance@1:6770e292c5fb3af3",
+      "suiteVersion": 1,
+      "split": "development",
+      "reportIds": [
+        "report-evaluation-candidate-1-1-independent-reports-0",
+        "report-evaluation-candidate-1-1-independent-reports-1",
+        "report-evaluation-candidate-1-1-required-consolidation-0",
+        "report-evaluation-candidate-1-1-required-consolidation-1"
+      ],
+      "model": {
+        "provider": "openrouter",
+        "model": "z-ai/glm-5.3-flash"
+      },
+      "configDigest": "51e60efe0794ddf3858876206a30f1ff4af0a795ee2f19606bc6dd2a62778eab",
+      "candidateDigest": "ebfe54785d328cd6d11cf64b2155eeff02782d0a40d8b4c33bd32514e159ef3f",
+      "feedback": [
+        {
+          "caseId": "independent-reports",
+          "status": "pass",
+          "checks": []
+        },
+        {
+          "caseId": "independent-reports",
+          "status": "error",
+          "checks": [
+            {
+              "name": "quality",
+              "status": "error",
+              "code": "evaluator_error",
+              "explanation": "Missing verifiable artifact citation"
+            }
+          ]
+        },
+        {
+          "caseId": "required-consolidation",
+          "status": "error",
+          "checks": [
+            {
+              "name": "quality",
+              "status": "error",
+              "code": "evaluator_error",
+              "explanation": "Missing verifiable artifact citation"
+            }
+          ]
+        },
+        {
+          "caseId": "required-consolidation",
+          "status": "pass",
+          "checks": []
+        }
+      ]
+    },
+    "eligible": false,
+    "finalVerification": null
+  },
+  "holdout": {
+    "exposed": false,
+    "usedBy": null
+  },
+  "updatedAt": "2026-09-12T14:01:49.461Z",
+  "failureReason": null,
+  "activeSince": null,
+  "elapsedCheckpointAt": 1789221707836,
+  "controlIntent": null,
+  "baseline": {
+    "eligible": true,
+    "comparable": true,
+    "metrics": {
+      "gateRate": {
+        "value": 1,
+        "unit": "ratio",
+        "direction": "higher",
+        "samples": 12,
+        "aggregation": "rate"
+      },
+      "contract.rawFormat": {
+        "value": 1,
+        "unit": "ratio",
+        "direction": "higher",
+        "samples": 4,
+        "aggregation": "rate"
+      },
+      "runtime.latencyMs": {
+        "value": 40146.25,
+        "unit": "ms",
+        "direction": "lower",
+        "samples": 4,
+        "aggregation": "mean"
+      },
+      "runtime.tokens": {
+        "value": 4260,
+        "unit": "tokens",
+        "direction": "lower",
+        "samples": 4,
+        "aggregation": "mean"
+      },
+      "runtime.knownUsd": {
+        "value": 0.001100215,
+        "unit": "USD",
+        "direction": "lower",
+        "samples": 4,
+        "aggregation": "mean"
+      },
+      "runtime.repairs": {
+        "value": 1,
+        "unit": "count",
+        "direction": "lower",
+        "samples": 4,
+        "aggregation": "mean"
+      },
+      "runtime.fallbacks": {
+        "value": 0,
+        "unit": "count",
+        "direction": "lower",
+        "samples": 4,
+        "aggregation": "mean"
+      },
+      "runtime.unresolved": {
+        "value": 0,
+        "unit": "count",
+        "direction": "lower",
+        "samples": 4,
+        "aggregation": "mean"
+      },
+      "quality.coverage": {
+        "value": 4,
+        "unit": "subjective ordinal 0–4",
+        "direction": "higher",
+        "samples": 4,
+        "aggregation": "mean"
+      },
+      "quality.parallelism": {
+        "value": 4,
+        "unit": "subjective ordinal 0–4",
+        "direction": "higher",
+        "samples": 4,
+        "aggregation": "mean"
+      }
+    },
+    "counts": {
+      "scheduled": 4,
+      "attempted": 4,
+      "responses": 4,
+      "completed": 4,
+      "errors": 0,
+      "cancelled": 0,
+      "firstSuccess": 0,
+      "repairs": 4,
+      "fallbacks": 0,
+      "unresolved": 0
+    },
+    "firstAttemptRate": 0,
+    "recoveryRate": 1,
+    "fallbackRate": 0,
+    "unresolvedRate": 0,
+    "comparison": "inconclusive",
+    "scope": "Observed finite suite and configured sample counts; no statistical or universal reliability claim",
+    "benchmarkVersion": "plan-dispatch-performance@1:6770e292c5fb3af3",
+    "suiteVersion": 1,
+    "split": "development",
+    "reportIds": [
+      "report-evaluation-baseline-1-independent-reports-0",
+      "report-evaluation-baseline-1-independent-reports-1",
+      "report-evaluation-baseline-1-required-consolidation-0",
+      "report-evaluation-baseline-1-required-consolidation-1"
+    ],
+    "model": {
+      "provider": "openrouter",
+      "model": "z-ai/glm-5.3-flash"
+    },
+    "configDigest": "51e60efe0794ddf3858876206a30f1ff4af0a795ee2f19606bc6dd2a62778eab",
+    "candidateDigest": "cec20702c40c171489542f82ab7a2ffb9c35772688015bc6853a701ca9743489",
+    "feedback": [
+      {
+        "caseId": "independent-reports",
+        "status": "pass",
+        "checks": []
+      },
+      {
+        "caseId": "independent-reports",
+        "status": "pass",
+        "checks": []
+      },
+      {
+        "caseId": "required-consolidation",
+        "status": "pass",
+        "checks": []
+      },
+      {
+        "caseId": "required-consolidation",
+        "status": "pass",
+        "checks": []
+      }
+    ]
+  },
+  "baselines": [
+    {
+      "eligible": true,
+      "comparable": true,
+      "metrics": {
+        "gateRate": {
+          "value": 1,
+          "unit": "ratio",
+          "direction": "higher",
+          "samples": 12,
+          "aggregation": "rate"
+        },
+        "contract.rawFormat": {
+          "value": 1,
+          "unit": "ratio",
+          "direction": "higher",
+          "samples": 4,
+          "aggregation": "rate"
+        },
+        "runtime.latencyMs": {
+          "value": 40146.25,
+          "unit": "ms",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.tokens": {
+          "value": 4260,
+          "unit": "tokens",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.knownUsd": {
+          "value": 0.001100215,
+          "unit": "USD",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.repairs": {
+          "value": 1,
+          "unit": "count",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.fallbacks": {
+          "value": 0,
+          "unit": "count",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "runtime.unresolved": {
+          "value": 0,
+          "unit": "count",
+          "direction": "lower",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "quality.coverage": {
+          "value": 4,
+          "unit": "subjective ordinal 0–4",
+          "direction": "higher",
+          "samples": 4,
+          "aggregation": "mean"
+        },
+        "quality.parallelism": {
+          "value": 4,
+          "unit": "subjective ordinal 0–4",
+          "direction": "higher",
+          "samples": 4,
+          "aggregation": "mean"
+        }
+      },
+      "counts": {
+        "scheduled": 4,
+        "attempted": 4,
+        "responses": 4,
+        "completed": 4,
+        "errors": 0,
+        "cancelled": 0,
+        "firstSuccess": 0,
+        "repairs": 4,
+        "fallbacks": 0,
+        "unresolved": 0
+      },
+      "firstAttemptRate": 0,
+      "recoveryRate": 1,
+      "fallbackRate": 0,
+      "unresolvedRate": 0,
+      "comparison": "inconclusive",
+      "scope": "Observed finite suite and configured sample counts; no statistical or universal reliability claim",
+      "benchmarkVersion": "plan-dispatch-performance@1:6770e292c5fb3af3",
+      "suiteVersion": 1,
+      "split": "development",
+      "reportIds": [
+        "report-evaluation-baseline-1-independent-reports-0",
+        "report-evaluation-baseline-1-independent-reports-1",
+        "report-evaluation-baseline-1-required-consolidation-0",
+        "report-evaluation-baseline-1-required-consolidation-1"
+      ],
+      "model": {
+        "provider": "openrouter",
+        "model": "z-ai/glm-5.3-flash"
+      },
+      "configDigest": "51e60efe0794ddf3858876206a30f1ff4af0a795ee2f19606bc6dd2a62778eab",
+      "candidateDigest": "cec20702c40c171489542f82ab7a2ffb9c35772688015bc6853a701ca9743489",
+      "feedback": [
+        {
+          "caseId": "independent-reports",
+          "status": "pass",
+          "checks": []
+        },
+        {
+          "caseId": "independent-reports",
+          "status": "pass",
+          "checks": []
+        },
+        {
+          "caseId": "required-consolidation",
+          "status": "pass",
+          "checks": []
+        },
+        {
+          "caseId": "required-consolidation",
+          "status": "pass",
+          "checks": []
+        }
+      ]
+    }
+  ],
+  "iterationIntent": null,
+  "pendingProposal": null,
+  "live": false,
+  "ownership": "none",
+  "controlAvailable": true,
+  "recoverable": false
+}

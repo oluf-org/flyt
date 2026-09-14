@@ -1,0 +1,19 @@
+version: 2
+id: dispatch-perf-baseline-mixed-full
+name: "Plan & dispatch performance: baseline-mixed-full"
+launchable: true
+blocks:
+  - id: dispatch
+    use: flyt-blocks-core:task-graph
+    config:
+      model: "z-ai/glm-5.3-flash"
+      parallelism: "high"
+      maxParallel: 2
+      minTasks: 4
+      maxTasks: 4
+      systemPrompt: "Follow the task-graph block invariant guidance."
+      workerMaxTokens: 16384
+      workerMaxSteps: 4
+      workerMaxOutputWords: 1000
+      taskAttempts: 1
+      workerInstructions: "This is a read-only supplied-facts benchmark. Do not use any tools. Produce the requested final result directly, verify arithmetic and preserve uncertainty. Keep short calculations concise; cover every requested row in the audit, using one short phrase per table cell."

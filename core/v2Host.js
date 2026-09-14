@@ -151,7 +151,7 @@ export async function createV2BuildController(booted, {
   stacks = null,
   stackRoot = null,
   historyRoot = stackRoot ? path.join(path.dirname(stackRoot), 'stack-history') : null,
-  preferredId = 'pipeline',
+  preferredId = 'make-change',
 } = {}) {
   if (!booted?.ctx?.commands) throw new Error('A Build controller needs a booted command seam');
   const kernel = await import('#kernel');

@@ -1,0 +1,19 @@
+version: 2
+id: dispatch-perf-production-glm
+name: "Plan & dispatch performance: production-glm"
+launchable: true
+blocks:
+  - id: dispatch
+    use: flyt-blocks-core:task-graph
+    config:
+      model: "z-ai/glm-5.3-flash"
+      parallelism: "high"
+      maxParallel: 3
+      minTasks: 3
+      maxTasks: 3
+      systemPrompt: "Follow the task-graph block invariant guidance."
+      workerMaxTokens: 8192
+      workerMaxSteps: 4
+      workerMaxOutputWords: 160
+      taskAttempts: 1
+      workerInstructions: "This is a read-only supplied-facts benchmark. Do not use any tools. Produce the requested final result directly, verify arithmetic and preserve uncertainty. Keep each answer under 130 words."

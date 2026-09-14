@@ -23,6 +23,19 @@ test('no change yields a null patch', () => {
   assert.equal(diffSnapshot(s, structuredClone(s)), null);
 });
 
+test('live canonical stages and final answer reach Work without reopening the run', () => {
+  const parent = {kind:'block',id:'deliver',use:'flyt-blocks-delivery:verified-change'};
+  const a = snap({stack:{id:'change',root:{kind:'sequence',children:[parent]}},conversation:[],session:{head:4}});
+  const b = snap({
+    stack:{...a.stack,root:{...a.stack.root,children:[{...parent,generated:[{kind:'block',id:'deliver.review',title:'Review the change',generated:true}]}]}},
+    conversation:[{role:'assistant',text:'Verified the change and its tests.'}],session:{head:20},
+  });
+  const merged=mergeSnapshot(a,diffSnapshot(a,b));
+  assert.deepEqual(merged,b);
+  assert.equal(merged.stack.root.children[0].generated[0].title,'Review the change');
+  assert.equal(merged.conversation[0].text,'Verified the change and its tests.');
+});
+
 test('a streaming node output only ships that node', () => {
   const a = snap({ nodeOutputs: { a: 'hello' } });
   const b = snap({ nodeOutputs: { a: 'hello world' } });

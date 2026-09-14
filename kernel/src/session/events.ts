@@ -79,6 +79,13 @@ export interface SessionEventMap {
   'block.output': Data & { blockId: string; content: string };
   'block.output.validation': Data & { blockId: string; words: number; maxOutputWords: number; valid: boolean };
   'workspace.observed': Data & { changed: boolean; kind: string; tool: string };
+  'workflow.budget': Data & { blockId: string; after: number; limits: JsonValue; deadline: number };
+  'workflow.call': Data & { id: string; owner: string; blockId: string; model: string };
+  'workflow.call-result': Data & { id: string; owner: string; costUsd: number | null };
+  'workflow.verification': Data & { blockId: string; receipt: JsonValue };
+  'workflow.acceptance': Data & { blockId: string; milestone: string; version: string };
+  'workflow.specification-review': Data & { blockId: string; pass: number; review: JsonValue; status: string };
+  'workflow.citation-correction': Data & { blockId: string; file: string; requestedLine: number; actualLine: number; quote: string };
   'supervisor.summary': Data & { content: string };
 }
 
@@ -90,6 +97,7 @@ export const SESSION_EVENTS = [
   'tool.input.start', 'tool.input.delta', 'tool.input.end', 'llm.response', 'llm.failure', 'task.retry',
   'tool.call', 'tool.state', 'permission.decision', 'sandbox.decision', 'sandbox.escalation', 'sandbox.failure', 'tool.result', 'tool.repetition',
   'block.status', 'block.warning', 'block.output', 'block.output.validation', 'workspace.observed', 'supervisor.summary',
+  'workflow.budget', 'workflow.call', 'workflow.call-result', 'workflow.verification', 'workflow.acceptance', 'workflow.specification-review', 'workflow.citation-correction',
 ] as const satisfies readonly (keyof SessionEventMap)[];
 
 export type SessionEventType = keyof SessionEventMap;

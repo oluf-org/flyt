@@ -152,7 +152,7 @@ class Run implements AgentRun {
   }
 
   /** Cooperatively hold between durable block boundaries. */
-  async waitIfPaused(session: SessionHandle): Promise<void> {
+  async waitIfPaused(session: SessionHandle): Promise<boolean> {
     let gate: Promise<void> | null = null;
     await this.transition(async () => {
       if (!this.pauseRequest || this.stopRequest || this.finished) return;
@@ -167,6 +167,7 @@ class Run implements AgentRun {
       this.pauseGate = null;
       this.releasePause = null;
     }
+    return gate !== null;
   }
 
   complete(session: SessionHandle, error: string | null = null, blockId: string | null = null, blocksRan = 0): Promise<RunOutcome> {
@@ -829,6 +830,7 @@ export class StackRunner extends Service implements AgentsSeam {
         attachments,
         ceiling,
         signal: run.signal,
+        checkpoint: () => run.waitIfPaused(session),
       });
     } catch (err) {
       // A throwing block is a failed block, not a crashed run: the walk still

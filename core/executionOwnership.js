@@ -20,8 +20,14 @@ export function ownerAlive(owner) {
 export function writeAtomic(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${crypto.randomUUID()}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(value));
-  fs.renameSync(temporary, file);
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(value));
+    fs.renameSync(temporary, file);
+  } finally {
+    // Windows may temporarily deny replacement while a reader has the file
+    // open. A failed heartbeat must not leave a new temp file every 5 seconds.
+    try { fs.unlinkSync(temporary); } catch { /* renamed or already removed */ }
+  }
 }
 export function acquireOwner(file) {
   fs.mkdirSync(path.dirname(file), { recursive: true });

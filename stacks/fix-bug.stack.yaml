@@ -1,0 +1,15 @@
+version: 2
+id: fix-bug
+name: Fix a bug
+description: Reproduce a problem, repair its cause, and verify the before-and-after result.
+launchable: true
+blocks:
+  - id: fix
+    use: flyt-blocks-delivery:fix-bug
+    title: Reproduce, repair and verify
+    config:
+      modelTier: standard
+      maxCalls: 120
+      maxMinutes: 30
+      hardMaxSteps: 80
+      repairPasses: 2

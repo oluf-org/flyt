@@ -177,6 +177,7 @@ const isSkipped = relPath => {
   if (normalized.split('/').some(segment => SKIP_DIRS.has(segment))) return true;
   return [...SKIP_PATHS].some(skipped => normalized === skipped || normalized.startsWith(`${skipped}/`));
 };
+export { isSkipped as isIgnoredProjectPath };
 
 // A small glob, deliberately: segment `*`, cross-segment `**`, single-char `?`.
 // No brace expansion and no character classes — those are a query language, and

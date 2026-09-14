@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { CampaignProgress } from './CampaignDesign.jsx';
 const show = value => value == null ? 'Unknown' : Number.isInteger(value) ? String(value) : value.toFixed(3);
 const promptDiff = (before, after) => {
   const a = before.split('\n'), b = after.split('\n');
@@ -14,13 +15,15 @@ export default function EvaluationResults({ projectId, goal, metrics }) {
   const invoke = (action, args) => window.flyt.goal(action, { projectId, goalId: goal.id, ...args });
   useEffect(() => { let live = true; setRecord(null); setReport(null); if (current) invoke('inspect', { record: current.artifact }).then(r => live && setRecord(r)).catch(e => live && setError(e.message)); return () => { live = false; }; }, [current?.artifact, goal.id]);
   const inspect = name => invoke('inspect', { record: name }).then(setReport).catch(e => setError(e.message));
-  const evaluation = record?.evaluation, primary = goal.contract.evaluation.ranking.primary;
+  const evaluation = record?.evaluation ?? (current?.candidateId === 'baseline' ? goal.baseline : null), primary = goal.contract.evaluation.ranking.primary;
   const baseline = [...(goal.baselines ?? []), ...(goal.baseline ? [goal.baseline] : [])].find(item => item.benchmarkVersion === evaluation?.benchmarkVersion);
   return <section className="loop-result evaluation-results" aria-label="Evaluation experiments">
     <header><h2>{goal.name}</h2><p role="status">{goal.status} · {goal.reason}</p></header>{metrics}
+    <CampaignProgress goal={goal} onInspect={inspect}/>
     {error && <p role="alert">{error}</p>}
     {goal.evaluationInterruption && <p>Interrupted evaluation: {goal.evaluationInterruption.reason} <button onClick={() => inspect(goal.evaluationInterruption.record)}>Inspect interruption</button></p>}
-    <p><strong>{goal.best ? `Best eligible: iteration ${goal.best.iteration}` : goal.bestPartial ? `Best partial: iteration ${goal.bestPartial.iteration} — not verified success` : 'No eligible candidate yet'}</strong></p>
+    <p><strong>{goal.best?.candidateId === 'baseline' ? 'Baseline retained' : goal.best ? `Best eligible: iteration ${goal.best.iteration}` : goal.bestPartial ? `Best partial: iteration ${goal.bestPartial.iteration} — not verified success` : 'No eligible candidate yet'}</strong></p>
+    {goal.contract.campaign && <details><summary>Directions and durable learning</summary>{goal.history.map(h => <p key={h.iteration}>{h.candidateId} · {h.family} · {h.outcome} <button onClick={() => inspect(`learning-experiment-${h.iteration}`)}>Inspect learning and evidence</button></p>)}</details>}
     <p>Current: {goal.current?.iteration ?? '—'} · Active benchmark v{goal.benchmark.version}</p>
     <p>Baseline under selected attempt’s benchmark: {show(baseline?.metrics[primary]?.value)} {primary}{!baseline && ' · no matching measurement available'}</p>
     <p>{goal.holdout?.exposed ? 'Exposed holdout: a fresh verification set is required for an independent claim.' : 'Held-out evidence is excluded from optimizer feedback.'}</p>

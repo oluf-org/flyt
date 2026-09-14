@@ -1,0 +1,15 @@
+version: 2
+id: review-change
+name: Review a change
+description: Find actionable problems in a pinned change, with evidence and explicit coverage.
+launchable: true
+blocks:
+  - id: review
+    use: flyt-blocks-delivery:review-change
+    title: Inspect the change
+    config:
+      modelTier: standard
+      maxCalls: 40
+      maxMinutes: 15
+      hardMaxSteps: 35
+      reviewBase: HEAD

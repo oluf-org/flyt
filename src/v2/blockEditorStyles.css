@@ -115,7 +115,7 @@
 
 /* Tasks fill the width they are given instead of one lane each: a wave of
    eight in a narrow pane becomes a readable column, not eight slivers. */
-.be-wave-tasks { display: grid; grid-template-columns: repeat(auto-fill, minmax(212px, 1fr)); align-items: start; gap: 7px; min-width: 0; }
+.be-wave-tasks { display: grid; grid-template-columns: repeat(auto-fit, minmax(212px, 1fr)); align-items: start; gap: 7px; min-width: 0; }
 .be-wave-more { min-width: 0; min-height: 66px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px; padding: 11px 13px; border: 1px dashed color-mix(in srgb, var(--accent) 38%, var(--border)); border-radius: 4px; background: color-mix(in srgb, var(--accent) 5%, var(--card)); color: var(--accent); cursor: pointer; text-align: left; }
 .be-wave-more:hover, .be-wave-more:focus-visible { border-style: solid; background: var(--accent-soft); outline: none; }
 .be-wave-more strong { font-size: 13px; font-weight: 650; }

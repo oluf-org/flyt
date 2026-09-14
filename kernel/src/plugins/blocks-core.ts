@@ -26,6 +26,7 @@ import type { BlockDefinition, BlockOutcome, BlockRun } from '../blocks/types.js
 import { MAX_STEPS, runAgentLoop } from '../blocks/run.js';
 import { AI_STEP_OUTPUT, AI_STEP_SETTINGS, executeAiStep } from './blocks-aistep.js';
 import type { PermissionPolicy, PermissionRule, SavedApproval } from '../security/permissions.js';
+import type { StructuredOutputRequest } from '../seams/llm.js';
 
 export const DEFAULT_WORKER_MAX_TOKENS = 32_768;
 
@@ -168,7 +169,7 @@ const str = (value: JsonValue | undefined, fallback = ''): string =>
  * @param run — the block's execution context.
  * @returns what it produced, and why it stopped.
  */
-async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<BlockOutcome> {
+async function executeAgentWork(run: BlockRun, standingSystem: string, options: { structuredOutput?: StructuredOutputRequest; toolLimits?: Readonly<Record<string, number>> } = {}): Promise<BlockOutcome> {
   const session = await run.ctx.sessions.open(run.runId);
   const instructions = str(run.config.instructions);
   const systemPrompt = str(run.config.systemPrompt, standingSystem);
@@ -186,7 +187,13 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
   }
   const shellNote = noCommands
     ? 'Shell commands are unavailable in this run: bash and run_gate are not offered and cannot be requested or escalated. Inspect the workspace with read_file, glob and search_files, and state plainly which verification you could not run.'
-    : '';
+    : wantsShell && run.ctx.shell?.world?.platform === 'win32'
+      ? 'This execution world runs on Windows. The bash tool executes Windows cmd.exe command lines, not Bash or PowerShell. Use native file readers for inspection. Run commands such as npm test directly; do not use Unix commands, semicolon separators, heredocs, or /dev/null redirection. A command syntax error is not evidence that shell access is unavailable.'
+      : wantsShell ? `This execution world runs on ${run.ctx.shell?.world?.platform ?? 'its host platform'}. Use native readers for inspection and the project's declared test commands. Keep code and tests portable across Windows, Linux and macOS unless the request narrows support; avoid assuming GNU-only utilities on macOS.` : '';
+  const probe = wantsShell && !noCommands && run.ctx.sandbox?.world?.sandbox?.standingMode !== 'danger-full-access'
+    ? await run.ctx.sandbox?.probe().catch(() => null) : null;
+  const subprocessNote = probe?.nodePipedChildren === false
+    ? 'The sandbox filesystem probe passed, but its Node piped-child probe failed. Node child_process with pipe stdio and test runners such as node --test may be unsupported in this confined world. Run the exact required command to record its actual result. If it fails for this reason, retain the failure and report the unavailable verification; avoid repeated infrastructure diagnostics, test-command rewrites, source reverts or claims that a different in-process command passed the requested check. Wider access still requires the ordinary explicit approval boundary.' : '';
   const tools = run.ctx.tools.list().filter(t => ceiling.includes(t.name));
   const permissionRules = Array.isArray(run.config.permissionRules)
     ? run.config.permissionRules as unknown as PermissionRule[] : [];
@@ -215,8 +222,10 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
     fallbackModels: Array.isArray(run.config.modelFallbacks)
       ? run.config.modelFallbacks.filter((model): model is string => typeof model === 'string' && Boolean(model))
       : [],
-    system: [systemPrompt, instructions, shellNote, EVIDENCE_INSTRUCTIONS].filter(Boolean).join('\n\n'),
+    system: [systemPrompt, instructions, shellNote, subprocessNote, EVIDENCE_INSTRUCTIONS].filter(Boolean).join('\n\n'),
     input: run.input, attachments: run.attachments,
+    ...(options.structuredOutput ? { structuredOutput: options.structuredOutput } : {}),
+    ...(options.toolLimits ? { toolLimits: options.toolLimits } : {}),
     tools,
     ceiling,
     ...(permissionPolicy ? { permissionPolicy } : {}),
@@ -228,6 +237,7 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
       ? { maxSteps: Math.max(1, Math.floor(run.config.hardMaxSteps)), boundedAnswer: true } : {}),
     maxTokens: typeof run.config.maxTokens === 'number' ? run.config.maxTokens : DEFAULT_WORKER_MAX_TOKENS,
     maxOutputWords: outputWordLimit(run.config.maxOutputWords),
+    ...(typeof run.config.effort === 'string' ? { reasoning: { effort: run.config.effort } } : {}),
     ...(typeof run.config.maxInputTokens === 'number' ? { checkpointInputTokens: run.config.maxInputTokens } : {}),
     ...(typeof run.config.modelRetryAttempts === 'number'
       ? { retry: { attempts: Math.max(1, Math.floor(run.config.modelRetryAttempts)) } } : {}),
@@ -277,9 +287,10 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
   }
   if (run.config.effect === 'workspace-change') {
     let changed = false;
-    for await (const event of session.read()) {
-      if (event.type === 'workspace.observed') {
-        changed = Boolean((event.data as { changed?: unknown })?.changed);
+    for await (const event of session.read(run.context?.after)) {
+      const data = event.data as { blockId?: string; changedSinceCall?: boolean };
+      if (event.type === 'workspace.observed' && data.blockId === run.blockId && data.changedSinceCall) {
+        changed = true;
       }
     }
     if (!changed) {
@@ -289,10 +300,10 @@ async function executeAgentWork(run: BlockRun, standingSystem: string): Promise<
       };
     }
   }
-  return { status: 'done', output: result.content };
+  return { status: 'done', output: result.content, ...(result.structuredOutput !== undefined ? { structured: result.structuredOutput } : {}) };
 }
 
-export const executeWork = (run: BlockRun): Promise<BlockOutcome> => executeAgentWork(run, WORK_SYSTEM);
+export const executeWork = (run: BlockRun, options: { structuredOutput?: StructuredOutputRequest; toolLimits?: Readonly<Record<string, number>> } = {}): Promise<BlockOutcome> => executeAgentWork(run, WORK_SYSTEM, options);
 
 /** The definition, exported so a test can hold the contract without booting a kernel. */
 export const workBlock: BlockDefinition = {

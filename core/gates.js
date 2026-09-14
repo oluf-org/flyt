@@ -186,7 +186,8 @@ export function gateProblem(command, { cwd = process.cwd(), lookup = null } = {}
   // Shell built-ins and operators are the caller's business, not ours: anything
   // with a pipe, a redirect or a chain is a shell line we do not try to parse.
   if (/[|&;<>()$`]/.test(text)) return null;
-  const bin = text.split(/\s+/)[0];
+  const bin = /^(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(text)?.slice(1).find(Boolean);
+  if (!bin) return null; // Leave shell syntax we cannot parse to the shell.
   const found = (lookup ?? whichSync)(bin, cwd);
   return found ? null : `\`${bin}\` is not an executable command on this machine`;
 }
@@ -194,13 +195,27 @@ export function gateProblem(command, { cwd = process.cwd(), lookup = null } = {}
 // `bin` on PATH, or a file in the project. Deliberately dependency-free and
 // deliberately cheap — this runs once per task, not once per call.
 function whichSync(bin, cwd) {
-  if (/[\\/]/.test(bin)) return fs.existsSync(path.resolve(cwd, bin));
+  const exists = file => {
+    try {
+      if (process.platform === 'win32') {
+        // App Execution Aliases (e.g. WindowsApps/python.exe) are reparse
+        // points: stat/exists can fail with EACCES even though cmd executes
+        // them. Inspect the directory entry, then let the confined command's
+        // actual receipt establish whether it ran successfully.
+        const stat = fs.lstatSync(file);
+        return stat.isFile() || stat.isSymbolicLink();
+      }
+      if (!fs.statSync(file).isFile()) return false;
+      fs.accessSync(file, fs.constants.X_OK); return true;
+    } catch { return false; }
+  };
+  if (/[\\/]/.test(bin)) return exists(path.resolve(cwd, bin));
   const exts = process.platform === 'win32'
     ? (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
     : [''];
   for (const dir of (process.env.PATH ?? '').split(path.delimiter).filter(Boolean)) {
     for (const ext of ['', ...exts]) {
-      try { if (fs.existsSync(path.join(dir, bin + ext))) return true; } catch { /* unreadable PATH entry */ }
+      if (exists(path.join(dir.replace(/^"|"$/g, ''), bin + ext))) return true;
     }
   }
   return false;

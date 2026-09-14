@@ -7,11 +7,14 @@ A block is one executable step contributed by a plugin. A stack references it wi
 | Plugin | Blocks | Purpose |
 |---|---|---|
 | `flyt-blocks-core` | `work`, `research`, `general-analysis`, `combine`, `split`, `plan-start`, `task-graph` | Bounded repository work, untrusted web reading, transformations, and agent-planned task dispatch |
+| `flyt-blocks-delivery` | `verified-change`, `fix-bug`, `review-change`, `research-question`, `plan-idea`, `complex-delivery` | Recommended workflows with observed effects, bounded verification and repair, evidence-backed reading, and durable serial milestones |
 | `flyt-blocks-judgement` | `evaluation`, `compare`, `prompt-refiner`, `human-checkpoint` | Review, comparison, brief refinement, and explicit human approval |
 | `flyt-blocks-inquiry` | `interrogate`, `orient` | Bounded questioning and grounded project orientation |
 | `flyt-blocks-loop` | `backlog-plan`, `loop-handoff` | Propose claimable tasks and queue them with durable receipts |
 
 The source of these contracts is `kernel/src/plugins/blocks-*.ts`. If this document disagrees with a registered definition, the definition is authoritative and this document must be corrected.
+
+The recommended workflows and their resource/evidence contracts are described in [default-workflows.md](docs/default-workflows.md). Delivery stages reuse the canonical worker. Their `systemPrompt` specializes the standing acceptance instructions; it cannot replace runtime effect, evidence, permission or resource checks. Structured workers retain ordinary tools until they submit their result; only a tool-free structured call forces submission.
 
 ## Definition contract
 
@@ -24,7 +27,7 @@ Every block declares:
 - `ceiling`: the maximum tool reach this block may ever receive; and
 - `execute`: the host-only implementation, never sent to the renderer.
 
-Every model-backed built-in exposes `systemPrompt` in its settings. Leaving it empty uses the block plugin's standing prompt; setting it in a stack's `config:` replaces that standing prompt for that workflow instance, while `instructions` remains an append-only specialization. `task-graph` exposes two prompt boundaries because it owns two roles: `systemPrompt` replaces the planner prompt and `workerSystemPrompt` replaces the generated workers' standing prompt. The resolved config and every `message.system` are recorded with the run, so an override is inspectable after the stack changes.
+Every model-backed built-in exposes `systemPrompt` in its settings. Leaving it empty uses the block plugin's standing prompt; setting it in a stack's `config:` replaces that standing prompt for that workflow instance (except delivery blocks, which retain acceptance instructions), while `instructions` remains an append-only specialization. `task-graph` exposes two prompt boundaries because it owns two roles: `systemPrompt` replaces the planner prompt and `workerSystemPrompt` replaces the generated workers' standing prompt. The resolved config and every `message.system` are recorded with the run, so an override is inspectable after the stack changes.
 
 Prompt refinement has a stricter interaction contract than ordinary model output. A consequential clarification must use `ask_human`; a prose question is intercepted before downstream planning, the block gets at most one human-question call, and an exhausted or unusable Free refiner degrades visibly to the original request plus any answer instead of forwarding an unanswered question or stopping the workflow.
 
@@ -44,7 +47,7 @@ For transformations that need only their supplied input, set `inputOnly: true` (
 
 Backlog handoff accepts explicit task objects and calls `queue_backlog_tasks` through the normal permission seam. The whole batch is validated before writing. Receipts identify actual stored tasks, retries of the same run/block/input reuse the same identities, and a storage failure reports partial receipts honestly. It does not start the Loop or make a model call. Ordinary workers retain their desktop queue restrictions; Goal recipes still exclude this queue boundary.
 
-`flyt-blocks-core:task-graph` is a leaf in the authored language and a run-time container in Work. Its planner produces a bounded DAG; validation rejects unknown dependencies, duplicate outputs, missing required producers, and cycles before child work is announced. An explicitly read-only brief also rejects any generated non-empty `writeFiles` scope before a child exists. Data producers and same-file writers receive deterministic edges, then ready tasks run in bounded waves. A generated task with an empty `writeFiles` declaration receives a read-only ceiling, so an analysis worker cannot spend its turn requesting writers or shell. The generated child blocks are durable run events nested under the authored block, never edits silently written back to the workflow.
+`flyt-blocks-core:task-graph` is a leaf in the authored language and a run-time container in Work. Its planner produces a bounded DAG; validation rejects unknown dependencies, duplicate outputs, missing required producers, and cycles before child work is announced. An explicitly read-only brief also rejects any generated non-empty `writeFiles` scope before a child exists. Data producers and same-file writers receive deterministic edges, then ready tasks fill a bounded worker pool. Every completion releases a slot immediately; unrelated slow tasks do not hold ready work behind a batch barrier. A generated task with an empty `writeFiles` declaration receives a read-only ceiling, so an analysis worker cannot spend its turn requesting writers or shell. The generated child blocks are durable run events nested under the authored block, never edits silently written back to the workflow.
 
 ## Execution and evidence
 

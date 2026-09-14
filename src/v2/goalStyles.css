@@ -1,5 +1,7 @@
 /* Goals — a loop you can read at a glance.
-   Header (identity + the three things you do) · sidebar (inspector) · canvas (Steps | Loop).
+   Header (identity + the three things you do) · sidebar (overview or step
+   inspector) · canvas (Steps | Loop) · configure panel (one page per concern,
+   over the canvas).
    Every colour is a token, so light and dark are one definition. The one local
    token is --goal-fill: the accent is a 3.9:1 surface against white, which is
    fine for a border and not fine behind 12px text, so filled controls use a
@@ -215,26 +217,26 @@
 .goal-sidebar-head { display: flex; align-items: center; min-height: 24px; margin-bottom: 14px; }
 .goal-sidebar-head h2 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
 .goal-page .goal-back { height: 24px; padding: 0 9px; border-color: transparent; background: transparent; color: var(--dim); font-size: 11px; }
-.goal-sidebar h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 13px; }
-.goal-sidebar h4 { margin: 14px 0 4px; font-size: 11px; color: var(--dim); }
-.goal-sidebar p { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.goal-sidebar pre { max-height: 240px; overflow: auto; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.goal-form h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 13px; }
+.goal-form h4 { margin: 14px 0 4px; font-size: 11px; color: var(--dim); }
+.goal-form p { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.goal-form pre { max-height: 240px; overflow: auto; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .goal-sidebar > button, .goal-sidebar > .goal-actions { margin-top: 12px; }
 
-.goal-sidebar details { border-top: 1px solid var(--border); padding: 12px 0; }
-.goal-sidebar summary {
+.goal-form details { border-top: 1px solid var(--border); padding: 12px 0; }
+.goal-form summary {
   display: flex; align-items: center; gap: 7px; cursor: pointer; list-style: none;
   font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--dim);
 }
-.goal-sidebar summary::-webkit-details-marker { display: none; }
-.goal-sidebar summary::before {
+.goal-form summary::-webkit-details-marker { display: none; }
+.goal-form summary::before {
   content: ''; flex: none; width: 5px; height: 5px;
   border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor;
   transform: translateY(-1px) rotate(-45deg); transition: transform .16s ease;
 }
-.goal-sidebar details[open] > summary { margin-bottom: 14px; }
-.goal-sidebar details[open] > summary::before { transform: translateY(-2px) rotate(45deg); }
-.goal-sidebar summary:hover { color: var(--tx); }
+.goal-form details[open] > summary { margin-bottom: 14px; }
+.goal-form details[open] > summary::before { transform: translateY(-2px) rotate(45deg); }
+.goal-form summary:hover { color: var(--tx); }
 
 .goal-field { display: flex; flex-direction: column; gap: 6px; margin: 0 0 15px; color: var(--dim); font-size: 11px; }
 .goal-field > label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -254,8 +256,8 @@
 .goal-check { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin: 10px 0; font-size: 12px; line-height: 1.45; }
 .goal-check input { flex: none; width: auto; margin-top: 1px; accent-color: var(--accent); }
 .goal-check small { flex-basis: 100%; padding-left: 21px; color: var(--faint); font-size: 10.5px; }
-.goal-sidebar fieldset { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; }
-.goal-sidebar legend { padding: 0 5px; color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.goal-form fieldset { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; }
+.goal-form legend { padding: 0 5px; color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .goal-children { display: grid; gap: 6px; margin: 0 0 14px; padding: 0; list-style: none; }
 .goal-children button { width: 100%; justify-content: flex-start; }
 
@@ -269,6 +271,97 @@
   padding: 2px 6px; border-radius: 5px; background: var(--accent-soft); color: var(--ok);
   font-size: 9.5px; font-weight: 700; font-variant-numeric: tabular-nums;
 }
+
+/* ---------- setup summary (sidebar) ---------- */
+
+/* One row per concern: what it is set to, and a way in. The fields themselves
+   live in the configure panel, so the overview stays the length of a glance. */
+.goal-setup-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0 8px; }
+.goal-setup-head h3 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+.goal-page .goal-setup-head button { height: 24px; padding: 0 9px; font-size: 11px; }
+.goal-summary { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1px; margin: 0 0 14px; padding: 3px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+.goal-page .goal-summary button {
+  width: 100%; min-width: 0; height: auto; min-height: 34px; gap: 8px; padding: 6px 6px 6px 10px; overflow: hidden;
+  border-color: transparent; border-radius: 7px; background: transparent; text-align: left;
+}
+.goal-page .goal-summary button:hover:not(:disabled) { border-color: transparent; background: var(--chip); }
+.goal-page .goal-summary button[aria-current] { background: var(--accent-soft); }
+.goal-summary-key { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; }
+.goal-summary-value {
+  flex: 1; min-width: 0; text-align: right; color: var(--dim); font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.goal-summary-value.attention { color: var(--goal-warn-tx); font-weight: 500; }
+.goal-summary-chevron {
+  flex: none; width: 5px; height: 5px; margin: 0 4px 0 0; opacity: .55;
+  border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor; transform: rotate(-45deg);
+}
+.goal-warn-badge {
+  display: inline-grid; place-items: center; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--warn-soft); color: var(--goal-warn-tx); font-size: 9.5px; font-weight: 800;
+}
+.goal-attention-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--goal-warn-tx); }
+
+/* Subheadings inside a form page — quieter than a section, louder than a label. */
+.goal-form .goal-subhead { display: flex; align-items: center; gap: 6px; margin: 22px 0 10px; font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--faint); }
+.goal-form .goal-subhead:first-child { margin-top: 0; }
+.goal-subhead-count { padding: 1px 6px; border-radius: 999px; background: var(--chip); color: var(--chip-tx); font-size: 9.5px; letter-spacing: 0; }
+.goal-field-hint { display: block; color: var(--faint); font-size: 10.5px; font-weight: 400; line-height: 1.5; }
+.goal-field.align-end { justify-content: flex-end; align-items: flex-start; }
+.goal-field-row.three { grid-template-columns: 1fr 1fr 1fr; }
+.goal-versions { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.goal-versions li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--border); }
+.goal-versions li > span { display: inline-flex; align-items: center; gap: 8px; }
+.goal-case > summary small { margin-left: auto; color: var(--faint); font-size: 10px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+
+/* ---------- configure panel ---------- */
+
+/* Sits over the canvas rather than beside it: the sidebar keeps its width, the
+   loop is one "Done" away, and the fields get the room a form needs. */
+.goal-config {
+  position: absolute; inset: 0; z-index: 6;
+  display: flex; flex-direction: column;
+  background: var(--canvas); animation: goal-config-in .16s ease-out;
+}
+@keyframes goal-config-in { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) { .goal-config { animation: none; } }
+.goal-config-head {
+  display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+  padding: 10px 20px; background: var(--card); border-bottom: 1px solid var(--border);
+}
+.goal-config-head h2 { display: flex; align-items: baseline; gap: 8px; min-width: 0; margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.2px; }
+.goal-config-head h2 span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 12px; font-weight: 500; }
+.goal-config-head .goal-actions { margin-left: auto; }
+.goal-page .goal-config-close { border-color: transparent; background: var(--goal-fill); color: var(--accent-tx); font-weight: 600; }
+.goal-page .goal-config-close:hover:not(:disabled) { filter: brightness(1.1); background: var(--goal-fill); border-color: transparent; }
+.goal-config-body { display: flex; flex: 1; min-height: 0; }
+.goal-config-nav {
+  flex: none; width: 236px; overflow: auto; padding: 10px;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; align-content: start;
+  background: var(--side); border-right: 1px solid var(--border);
+}
+.goal-page .goal-config-nav button {
+  width: 100%; min-width: 0; height: auto; flex-direction: column; align-items: flex-start; gap: 3px; overflow: hidden;
+  padding: 9px 11px; border-color: transparent; border-radius: 9px; background: transparent; text-align: left;
+}
+.goal-page .goal-config-nav button:hover:not(:disabled) { border-color: transparent; background: var(--chip); }
+.goal-page .goal-config-nav button[aria-current] { background: var(--card); border-color: var(--border); box-shadow: var(--shadow-rest); }
+.goal-config-nav-title { display: flex; align-items: center; gap: 6px; width: 100%; font-size: 12.5px; font-weight: 600; }
+.goal-page .goal-config-nav small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--faint); font-size: 10.5px; font-weight: 400; }
+.goal-config-pane { flex: 1; min-width: 0; overflow: auto; padding: 22px 32px 56px; }
+.goal-config-inner { max-width: 600px; }
+.goal-form.goal-config-pane h3 { margin: 0 0 4px; font-size: 17px; font-weight: 600; letter-spacing: -.3px; }
+.goal-form.goal-config-pane h3:focus-visible { outline: 0; }
+.goal-config-pane .goal-lead { margin: 0 0 20px; color: var(--dim); font-size: 12.5px; line-height: 1.55; }
+.goal-config-pane .goal-field { margin-bottom: 16px; }
+.goal-config-pane .goal-field.ai-changed { margin-left: -10px; margin-right: -10px; }
+.goal-config-pane details { border-top: 1px solid var(--border); padding: 14px 0; }
+.goal-config-pane details details { border-top: 0; padding: 8px 0 0; }
+.goal-config-pane fieldset { grid-template-columns: 1fr 1fr 1fr; }
+.goal-config-pane .goal-case { padding: 10px 12px; margin: 0 0 8px; border: 1px solid var(--border); border-radius: 9px; }
+.goal-config-pane .goal-case[open] { background: var(--card); }
+.goal-config-pane .goal-case > summary { text-transform: none; letter-spacing: 0; font-size: 12.5px; color: var(--tx); }
+.goal-config-pane .goal-case[open] > summary { margin-bottom: 12px; }
 
 /* ---------- canvas ---------- */
 
@@ -546,6 +639,8 @@
   .goal-header { flex-wrap: wrap; padding: 12px 16px; }
   .goal-sidebar { width: 290px; min-width: 250px; }
   .goal-canvas { padding: 0 14px 24px; }
+  .goal-config-nav { width: 190px; }
+  .goal-config-pane { padding: 18px 20px 48px; }
   .goal-node-position { min-width: 118px; }
 }
 @media (max-width: 760px) {
@@ -569,7 +664,12 @@
   .goal-menu { position: static; }
   .goal-menu-pop, .goal-menu.push .goal-menu-pop { left: 4px; right: 4px; width: auto; min-width: 0; max-width: none; }
   .goal-menu-value { max-width: 96px; }
-  .goal-field-row, .goal-sidebar fieldset { grid-template-columns: 1fr; }
+  .goal-field-row, .goal-field-row.three, .goal-form fieldset, .goal-config-pane fieldset { grid-template-columns: 1fr; }
+  .goal-config-body { flex-direction: column; }
+  .goal-config-nav { display: flex; width: auto; gap: 4px; overflow-x: auto; padding: 8px 10px; border-right: 0; border-bottom: 1px solid var(--border); }
+  .goal-page .goal-config-nav button { width: auto; flex: none; padding: 6px 10px; }
+  .goal-page .goal-config-nav small { display: none; }
+  .goal-config-pane { padding: 16px 16px 40px; }
 }
 
 /* Evaluation uses existing Goal tokens and scroll containers. */

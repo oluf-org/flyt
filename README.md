@@ -4,6 +4,7 @@ Flyt is a desktop app for composing and running inspectable AI work. The shippin
 
 ## What ships
 
+- **Default workflows:** Make a change, Fix a bug, Review a change, Research a question, Plan an idea, and Deliver a complex task. They share bounded execution, observed evidence, and recoverable progress. [Workflow contracts](docs/default-workflows.md) describe behavior and limits; [plugin opportunities](docs/workflow-plugin-opportunities.md) identify extension points.
 - **Plugins** contribute blocks, tools, skills, and typed UI extensions.
 - **Stacks** compose blocks through bounded containment in `.stack.yaml` files.
 - **Runs** use an append-only session log and rebuildable artifact projection.

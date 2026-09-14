@@ -208,6 +208,9 @@ export default function DailyRoot() {
 
   useEffect(() => window.flyt.onWorkflowEvent?.(entry => {
     if (entry?.projectId !== activeRef.current) return;
+    // The retained conversation shows a single compact notice for this optional
+    // recap. It must not also become a global operation-error banner.
+    if (entry.code === 'optional_summary_unavailable') return;
     if (entry.kind === 'warning') { setError(entry.message ?? 'The workflow supervisor degraded.'); return; }
     if (entry.runId && watchingRef.current?.runId && entry.runId !== watchingRef.current.runId) return;
     if (entry.kind === 'approval' || entry.kind === 'question') setWorkflowInteraction(entry);

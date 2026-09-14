@@ -1,7 +1,7 @@
 // Shared projections for loop results, chat history and historical statistics.
 // Counts belong to a loop instance, never to each of its child workflows.
 const number = value => Number.isFinite(value) && value >= 0 ? value : 0;
-export const LOOP_SETTLED = new Set(['achieved', 'failed', 'stopped', 'plateau', 'limit_reached']);
+export const LOOP_SETTLED = new Set(['achieved', 'completed', 'failed', 'stopped', 'plateau', 'limit_reached']);
 
 export function loopSummary(state, usage = state.usage ?? {}) {
   const checks = (state.contract?.criteria?.length ?? 0) + (state.contract?.tests?.length ?? 0);

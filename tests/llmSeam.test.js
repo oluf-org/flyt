@@ -78,6 +78,7 @@ test('structured output negotiates native schema, synthetic submission tool, the
   const syntheticAnswer = await synthetic.kernel.ctx.llm.complete(request({ structuredOutput }));
   assert.equal(synthetic.seen[0].responseFormat, undefined);
   assert.equal(synthetic.seen[0].tools.at(-1).function.name, 'submit_task_graph');
+  assert.equal(synthetic.seen[0].requireParameters, true, 'forced submission must not route through endpoints that ignore required parameters');
   assert.deepEqual(syntheticAnswer.structuredOutput, { tasks: [] });
   assert.equal(syntheticAnswer.toolCalls, undefined, 'the submission settles as output, not a pending executable call');
   await synthetic.kernel.dispose();
@@ -98,6 +99,23 @@ test('a model nothing can serve is refused, naming it', async () => {
   await assert.rejects(() => boot.kernel.ctx.llm.complete(request({ model: 'nobody/knows' })),
     /No connected provider can serve "nobody\/knows"/);
   await boot.kernel.dispose();
+});
+
+test('structured workers can use ordinary tools before submitting their final report', async () => {
+  const boot = await bootLlm({ answer: { text: '', finishReason: 'tool_calls', message: { tool_calls: [{
+    id: 'read', function: { name: 'read_file', arguments: '{"path":"target.txt"}' },
+  }] } } });
+  try {
+    const answer = await boot.kernel.ctx.llm.complete(request({
+      tools: [{ name: 'read_file', description: 'Read source', parameters: { type: 'object', properties: { path: { type: 'string' } } } }],
+      structuredOutput: { name: 'submit_result', schema: { type: 'object', properties: { summary: { type: 'string' } } } },
+    }));
+    assert.equal(boot.seen[0].toolChoice, 'auto', 'forcing the submission tool would prevent actual work');
+    assert.equal(boot.seen[0].requireParameters, undefined, 'ordinary reader/tool selection is not forced');
+    assert.equal(answer.toolCalls[0].name, 'read_file');
+    assert.equal(answer.structuredOutput, undefined);
+    assert.deepEqual(boot.seen[0].tools.map(tool => tool.function.name), ['read_file', 'submit_result']);
+  } finally { await boot.kernel.dispose(); }
 });
 
 test('a configured fallback resolves and runs only after an earlier model fails before output', async () => {
