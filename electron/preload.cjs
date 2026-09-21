@@ -202,14 +202,21 @@ const api = {
   // --- The chat (DECISIONS.md D45) ---
   // One turn loop over a read-mostly toolset whose single write is
   // enqueue_task. Not a second orchestrator: work still goes through the loop.
-  chatThreads: (pid) => ipcRenderer.invoke('chat:threads', pid),
-  chatRead: (pid, threadId) => ipcRenderer.invoke('chat:read', pid, threadId),
-  chatNew: (pid) => ipcRenderer.invoke('chat:new', pid),
-  chatSend: (pid, threadId, text, worker = null) => ipcRenderer.invoke('chat:send', pid, threadId, text, worker),
-  chatStop: (pid, threadId) => ipcRenderer.invoke('chat:stop', pid, threadId),
-  chatDelete: (pid, threadId) => ipcRenderer.invoke('chat:delete', pid, threadId),
-  chatTools: () => ipcRenderer.invoke('chat:tools'),
-  // Streaming tokens and tool calls, mirroring onLoopEvent.
+  //
+  // `channel` is which conversation is being addressed — 'loop' for the board's
+  // drawer, 'build' for the editor's modal. It rides on every call rather than
+  // being implied by the caller, because the alternative is a thread list that
+  // silently belongs to whoever asked last. Defaulted to 'loop', so the threads
+  // already on disk stay exactly where they are.
+  chatThreads: (pid, channel = 'loop') => ipcRenderer.invoke('chat:threads', pid, channel),
+  chatRead: (pid, threadId, channel = 'loop') => ipcRenderer.invoke('chat:read', pid, threadId, channel),
+  chatNew: (pid, channel = 'loop') => ipcRenderer.invoke('chat:new', pid, channel),
+  chatSend: (pid, threadId, text, worker = null, channel = 'loop') => ipcRenderer.invoke('chat:send', pid, threadId, text, worker, channel),
+  chatStop: (pid, threadId, channel = 'loop') => ipcRenderer.invoke('chat:stop', pid, threadId, channel),
+  chatDelete: (pid, threadId, channel = 'loop') => ipcRenderer.invoke('chat:delete', pid, threadId, channel),
+  chatTools: (channel = 'loop') => ipcRenderer.invoke('chat:tools', channel),
+  // Streaming tokens and tool calls, mirroring onLoopEvent. One stream for
+  // every channel; each entry names its own, and the renderer filters.
   onChatEvent: (cb) => {
     const handler = (_e, entry) => cb(entry);
     ipcRenderer.on('chat:event', handler);

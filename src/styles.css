@@ -5233,95 +5233,10 @@ button.big { padding: 10px 22px; font-size: 13.5px; border-radius: 10px; }
    feature, and hiding it would make the thing look broken rather than safe. */
 .loop-drawer-tabs { display: flex; gap: 2px; }
 .loop-drawer-tab.active { color: var(--tx); }
-.loop-chat {
-  display: grid; grid-template-columns: 160px 1fr; gap: 12px;
-  height: calc(var(--loop-drawer-height, 300px) - 48px); min-height: 0; padding-bottom: 12px;
-}
-.loop-chat-rail {
-  display: flex; flex-direction: column; gap: 3px; overflow-y: auto;
-  border-right: 1px solid var(--border); padding-right: 8px;
-}
-.loop-chat-new {
-  font-size: 11px; padding: 4px 8px; align-self: flex-start; margin-bottom: 4px;
-}
-.loop-chat-thread { display: flex; align-items: center; gap: 4px; }
-.loop-chat-thread .pick {
-  flex: 1; min-width: 0; text-align: left; background: none; border: 0;
-  padding: 4px 6px; border-radius: 5px; font: inherit; font-size: 11px;
-  color: var(--dim); cursor: pointer;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-.loop-chat-thread .pick:hover { background: var(--chip); color: var(--tx); }
-.loop-chat-thread.active .pick { background: var(--accent-soft); color: var(--tx); }
-.loop-chat-thread .del { opacity: 0; font-size: 11px; transition: opacity .14s ease; }
-.loop-chat-thread:hover .del, .loop-chat-thread .del:focus-visible { opacity: .7; }
-.loop-chat-thread .del:hover { opacity: 1; color: var(--err); }
-.loop-chat-rail .empty { color: var(--faint); font-size: 11px; margin: 4px 6px; }
-
-.loop-chat-main { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-.loop-chat-body {
-  flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px;
-  padding: 4px 8px 4px 0;
-}
-.loop-chat-turn { display: flex; flex-direction: column; gap: 5px; font-size: 12px; line-height: 1.55; }
-.loop-chat-turn .text { margin: 0; white-space: pre-wrap; }
-.loop-chat-turn.user .text {
-  align-self: flex-end; max-width: 80%; padding: 6px 10px; border-radius: 10px 10px 2px 10px;
-  background: var(--accent-soft); color: var(--tx);
-}
-.loop-chat-turn.assistant .text { color: var(--tx); }
-.loop-chat-turn.assistant .text.thinking, .loop-chat-meta { color: var(--faint); font-size: 11px; }
-.loop-chat-turn .text.err { color: var(--err); }
-.loop-chat-meta { margin: 0; }
-
-/* One line per tool call, expandable. Never hidden: the trust model of this
-   app is that you can see what it did. */
-.loop-chat-tool button {
-  display: flex; align-items: baseline; gap: 7px; width: 100%;
-  background: none; border: 0; padding: 2px 5px; border-radius: 4px;
-  font: inherit; font-size: 11px; color: var(--dim); text-align: left; cursor: pointer;
-}
-.loop-chat-tool button:hover { background: var(--chip); }
-.loop-chat-tool .subject { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.loop-chat-tool .glyph { margin-left: auto; color: var(--ok); flex: none; }
-.loop-chat-tool.failed .glyph { color: var(--err); }
-.loop-chat-tool .ms { color: var(--faint); font-size: 10px; flex: none; }
-.loop-chat-tool .args {
-  margin: 2px 0 4px 12px; padding: 6px 8px; border-radius: 5px;
-  background: var(--canvas); border: 1px solid var(--border);
-  font-size: 10px; color: var(--dim); max-height: 160px; overflow: auto;
-}
-.loop-chat-tool .err { margin: 2px 0 0 12px; font-size: 10px; color: var(--err); }
-
-/* A task the model queued, as the card it became. */
-.loop-chat-proposal {
-  border: 1px solid var(--border); border-left: 2px solid var(--accent);
-  border-radius: 6px; padding: 7px 9px; background: var(--card);
-  display: flex; flex-direction: column; gap: 4px;
-}
-.loop-chat-proposal .head { display: flex; align-items: baseline; gap: 7px; font-size: 11px; }
-.loop-chat-proposal .badge {
-  font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em;
-  color: var(--accent); background: var(--accent-soft); border-radius: 4px; padding: 1px 5px;
-}
-.loop-chat-proposal .head code { color: var(--faint); }
-.loop-chat-proposal .head strong { color: var(--tx); font-weight: 600; }
-.loop-chat-proposal .goal { margin: 0; font-size: 11px; color: var(--dim); }
-
-.loop-chat-starters { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
-.loop-chat-starters p { margin: 0 0 2px; font-size: 11px; color: var(--faint); max-width: 60ch; }
-.loop-chat-starters button { font-size: 11px; padding: 4px 10px; }
-
-.loop-chat-error { font-size: 11px; color: var(--err); }
-.loop-chat-compose { display: flex; align-items: flex-end; gap: 8px; }
-.loop-chat-model { display: flex; flex-direction: column; gap: 2px; flex: none; }
-.loop-chat-cost { font-size: 10px; color: var(--faint); }
-.loop-chat-compose textarea {
-  flex: 1; min-width: 0; resize: none; padding: 7px 10px; border-radius: 8px;
-  border: 1px solid var(--border); background: var(--card); color: var(--tx);
-  font: inherit; font-size: 12px; line-height: 1.5;
-}
-.loop-chat-compose textarea:focus-visible { outline: none; border-color: var(--accent); }
+/* The chat window moved to src/chat/chatStyles.css when the Loop drawer and
+   the Build modal became one component (src/chat/Chat.jsx). Its rules are
+   `.flyt-chat*` now, imported by that component, so a change lands on both
+   surfaces. The drawer that HOLDS the Loop's chat is still above. */
 
 /* --- the v2 shell (t-0073) ------------------------------------------------
    Three permanent destinations and one transient record. Work keeps the

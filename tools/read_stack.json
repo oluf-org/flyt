@@ -1,0 +1,47 @@
+{
+  "id": "read_stack",
+  "title": "Read the open workflow",
+  "description": "Read the workflow currently open in Build: its name, every block and control in order, each block's settings and declared outputs, its named modes, and the static verification result (errors and warnings) as the editor shows it. Call this FIRST when asked anything about \"this workflow\" — it is the graph on the screen, including edits that have not been saved to YAML yet.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "read"
+  ],
+  "scope": "workspace",
+  "risk": "safe",
+  "autoExecute": true,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "type": "string",
+        "description": "Ignored unless several workflows are bound; the open one is the default and usually the only one."
+      }
+    }
+  },
+  "keywords": [
+    "workflow",
+    "stack",
+    "graph",
+    "blocks",
+    "build",
+    "editor",
+    "steps"
+  ],
+  "examples": [
+    "what does this workflow do",
+    "why does this workflow fail verification"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

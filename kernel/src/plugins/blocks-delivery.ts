@@ -22,7 +22,7 @@ const validators = new Map<unknown, ReturnType<typeof ajv.compile>>([
 ]);
 const SETTINGS = {
   ...WORK_SETTINGS, properties: { ...WORK_SETTINGS.properties,
-    systemPrompt: { type: 'string', format: 'multiline', description: 'Additional domain guidance. Standing acceptance instructions and runtime checks remain authoritative.' },
+    systemPrompt: { title: 'Additional system guidance', type: 'string', format: 'multiline', description: 'This block uses built-in prompts for each execution stage. Add domain guidance here; leave blank to use those instructions. Standing acceptance instructions and runtime checks remain authoritative.' },
     maxCalls: { type: 'integer', minimum: 1, maximum: 2000, default: 120, description: 'Total provider attempts, including review, repairs and retries. Preserved across resume.' },
     maxMinutes: { type: 'integer', minimum: 1, maximum: 1440, default: 30, description: 'Elapsed minutes from first execution, including pauses. Preserved across resume.' },
     maxUsd: { type: 'number', minimum: 0.01, description: 'Stop new calls at this settled cost. An in-flight call may exceed it; unknown cost stops further calls.' },

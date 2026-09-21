@@ -24,7 +24,7 @@ import { correctionFields } from './repair.js';
 import { pushRefs, git, releaseDeadOwners } from './worktree.js';
 import { workerForLevel, workerForLevelMap, levelFor, LEVELS } from './levels.js';
 import { blockersAll, boardBlockers } from './blockers.js';
-import { ChatStore, runChatTurn, CHAT_TOOLS } from './chat.js';
+import { ChatStore, runChatTurn, chatChannel } from './chat.js';
 import { breakdown, costOf, liveEntries, totalsWithLive } from './ledger.js';
 import { executeTool, getTools, registerDefinition } from './tools/index.js';
 import { canUseFlytTools } from './adapters/index.js';
@@ -564,17 +564,24 @@ export function createApi(engine) {
   // One chat store per project, beside the backlog. Same rule as everything
   // else the loop owns: it lives in the MAIN checkout's config dir, never in a
   // worktree (DESIGN-SPEC.md §8).
+  // One store per project PER CHANNEL. The Loop's threads keep the `chats`
+  // directory they are already in; a channel with a `dir` gets a subdirectory of
+  // it, which ChatStore.threads() cannot see because it lists only `*.jsonl`.
+  // No migration, and no chance of the two lists bleeding together.
   const chats = new Map();
-  const chatFor = projectId => {
+  const chatFor = (projectId, channel = 'loop') => {
     proj(projectId);
-    let c = chats.get(projectId);
+    const lane = chatChannel(channel);
+    const key = `${projectId}:${lane.id}`;
+    let c = chats.get(key);
     if (c) return c;
     const dir = engine.configDirOf(projectId);
     if (!dir) {
       throw new ApiError('This project has no folder, so it has nowhere to keep a conversation.',
         { status: 400, code: 'no_chat' });
     }
-    chats.set(projectId, c = new ChatStore(path.join(dir, 'chats')));
+    const root = lane.dir === '.' ? path.join(dir, 'chats') : path.join(dir, 'chats', lane.dir);
+    chats.set(key, c = new ChatStore(root));
     return c;
   };
 
@@ -739,8 +746,13 @@ export function createApi(engine) {
    * is an honest error rather than a silent pick, since this is a chat box
    * wired to a paid API.
    */
-  const chatWorkerDefault = () => {
-    const saved = engine.settings?.chat?.worker;
+  const chatWorkerDefault = (channel = 'loop') => {
+    // The choice made on THIS channel first: Build picking something cheap for
+    // reading a graph must not re-point the Loop's chat at it. The old flat
+    // `chat.worker` is still read as the loop's, because that is where the
+    // single-channel version wrote it.
+    const saved = engine.settings?.chat?.workers?.[channel]
+      ?? (channel === 'loop' ? engine.settings?.chat?.worker : null);
     if (saved?.model) return saved;
     for (const band of LEVELS) {
       const model = runtimeConfig.loop?.models?.[band];
@@ -1658,41 +1670,52 @@ export function createApi(engine) {
     // expensive still goes through the loop, in a worktree, behind gates, with
     // a reviewer. The toolset (core/chat.js CHAT_TOOLS) is what enforces that —
     // not the system prompt, which a model can be talked out of.
-    'chat:threads': ({ projectId }) => {
-      const store = chatFor(projectId);
+    'chat:threads': ({ projectId, channel = 'loop' }) => {
+      const store = chatFor(projectId, channel);
       return { threads: store.threads(), problems: store.problems ?? [] };
     },
-    'chat:read': ({ projectId, threadId }) => ({ turns: chatFor(projectId).read(threadId) }),
-    'chat:new': ({ projectId }) => ({ threadId: chatFor(projectId).newThreadId() }),
-    'chat:delete': ({ projectId, threadId }) => ({ removed: chatFor(projectId).remove(threadId) }),
-    'chat:stop': ({ projectId, threadId }) => {
-      const ctl = chatRuns.get(`${projectId}:${threadId}`);
+    'chat:read': ({ projectId, threadId, channel = 'loop' }) => ({ turns: chatFor(projectId, channel).read(threadId) }),
+    'chat:new': ({ projectId, channel = 'loop' }) => ({ threadId: chatFor(projectId, channel).newThreadId() }),
+    'chat:delete': ({ projectId, threadId, channel = 'loop' }) => ({ removed: chatFor(projectId, channel).remove(threadId) }),
+    'chat:stop': ({ projectId, threadId, channel = 'loop' }) => {
+      const ctl = chatRuns.get(`${projectId}:${chatChannel(channel).id}:${threadId}`);
       if (!ctl) return { stopped: false, reason: 'nothing running' };
       ctl.abort();
       return { stopped: true };
     },
-    'chat:send': async ({ projectId, threadId, text, worker = null }) => {
-      const key = `${projectId}:${threadId}`;
+    'chat:send': async ({ projectId, threadId, text, worker = null, channel = 'loop' }) => {
+      const lane = chatChannel(channel);
+      const key = `${projectId}:${lane.id}:${threadId}`;
       if (chatRuns.has(key)) {
         throw new ApiError('That thread is already answering. Stop it first.',
           { status: 409, code: 'chat_busy' });
       }
       const entry = proj(projectId);
-      const store = chatFor(projectId);
-      const backlog = backlogFor(projectId);
-      const tasks = backlog.list();
+      const store = chatFor(projectId, lane.id);
+      // Build's chat is about a graph, not a queue, and a project whose backlog
+      // will not load must still be able to answer "what does this workflow
+      // do". So the backlog is read for the channel that is standing in it.
+      const wantsBacklog = lane.id === 'loop';
+      const backlog = wantsBacklog ? backlogFor(projectId) : null;
+      const tasks = backlog ? backlog.list() : [];
       // The same context the board reads, so the chat's answer to "why is
       // t-0008 blocked" and the card's sentence cannot disagree.
-      const blockerCtx = {
+      const blockerCtx = wantsBacklog ? {
         tasks, problems: backlog.problems ?? [],
         config: runtimeConfig, settings: publicSettings(),
         status: loopStatusOf(projectId), spend: spendCheckOf(projectId),
         cwd: entry.folder ?? undefined
-      };
+      } : {};
+      // What the editor is drawing, from the host that owns it. Absent — a
+      // headless caller, or nothing open — the channel's tools say so honestly
+      // rather than reading a file that may disagree with the screen.
+      const workflow = lane.id === 'build'
+        ? engine.chatContextFor?.('build', projectId) ?? null
+        : null;
       // The picked worker, or the band the user already trusts, or nothing —
       // in which case say so rather than silently calling something they did
       // not choose.
-      const target = resolveWorkerArg(worker ?? chatWorkerDefault(), { withKey: true });
+      const target = resolveWorkerArg(worker ?? chatWorkerDefault(lane.id), { withKey: true });
       if (!target) {
         throw new ApiError('No model is set for chat. Pick one beside the send button.',
           { status: 400, code: 'no_worker' });
@@ -1701,15 +1724,15 @@ export function createApi(engine) {
       chatRuns.set(key, ctl);
       try {
         return await runChatTurn({
-          store, threadId, text, projectName: entry.name ?? null,
+          store, threadId, text, channel: lane.id, projectName: entry.name ?? null,
           worker: { provider: target.provider, model: target.model },
           apiKey: target.apiKey ?? null,
-          tasks, blockerCtx,
+          tasks, blockerCtx, workflow, selected: workflow?.selected ?? null,
           // The tool ctx. `backlog` is what makes list_tasks/read_task/
           // why_blocked/enqueue_task work; `workspace` is what read_file and
           // glob act on. No `pool`, so nothing here can reach a worktree.
           toolCtx: {
-            backlog,
+            ...(backlog ? { backlog } : {}),
             references: engine.references ?? null,
             config: runtimeConfig,
             ...(entry.folder ? { workspace: new Workspace(entry.folder) } : {})
@@ -1717,8 +1740,8 @@ export function createApi(engine) {
           signal: ctl.signal,
           timeout: runtimeConfig.timeout,
           retry: runtimeConfig.retry,
-          onText: chunk => engine.emitChat?.(projectId, { kind: 'text', threadId, text: chunk }),
-          onEvent: ev => engine.emitChat?.(projectId, ev)
+          onText: chunk => engine.emitChat?.(projectId, { kind: 'text', channel: lane.id, threadId, text: chunk }),
+          onEvent: ev => engine.emitChat?.(projectId, { channel: lane.id, ...ev })
         });
       } finally {
         chatRuns.delete(key);
@@ -1731,7 +1754,10 @@ export function createApi(engine) {
           const ledger = engine.ledgerFor(projectId);
           if (ledger && last?.usage) {
             ledger.record({
-              source: 'chat', threadId, node: 'chat',
+              // Still one `chat` source, so an existing burn bar keeps adding
+              // up; the channel rides alongside, so "who spent this" stays
+              // answerable without reading every thread.
+              source: 'chat', channel: lane.id, threadId, node: 'chat',
               provider: target.provider, model: target.model, usage: last.usage,
               ...costFor(last.usage, target)
             });
@@ -1739,7 +1765,7 @@ export function createApi(engine) {
         } catch { /* an unwritable ledger must never fail a turn that succeeded */ }
       }
     },
-    'chat:tools': () => ({ tools: CHAT_TOOLS }),
+    'chat:tools': ({ channel = 'loop' } = {}) => ({ tools: chatChannel(channel).tools, channel: chatChannel(channel).id }),
 
     // --- Tool feedback (DESIGN-SPEC.md §8) -------------------------------------
     //

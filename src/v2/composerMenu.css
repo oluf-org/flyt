@@ -1,0 +1,56 @@
+/* ComposerMenu — the pill in a composer that opens a popover above itself.
+   Structure and behaviour belong together, so this file lives with
+   src/v2/ComposerMenu.jsx and is imported by it: every surface that renders the
+   widget gets its shape, whether or not that surface loads goalStyles.css.
+   (It did not, which is how the Build chat's pills first drew as bare browser
+   buttons.) The SKIN is still per-surface, because `.goal-page` and
+   `.flyt-chat` each set their own control base — see the `.goal-page
+   .goal-menu-*` rules in goalStyles.css and the `.flyt-chat .goal-menu-*` ones
+   in src/chat/chatStyles.css. */
+
+.goal-menu { position: relative; display: inline-flex; min-width: 0; }
+/* The model belongs to the send, not to the scope: it sits with the button. */
+.goal-menu.push { margin-left: auto; }
+.goal-menu.push .goal-menu-pop { left: auto; right: 0; }
+.goal-menu-trigger svg { flex: none; width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; }
+.goal-menu-value { flex: 0 1 auto; min-width: 0; max-width: 168px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-menu-caret {
+  flex: none; width: 5px; height: 5px; margin: -3px 0 0 -1px; opacity: .7;
+  border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor;
+  transform: rotate(45deg); transition: transform .16s var(--spring, ease);
+}
+.goal-menu-trigger[aria-expanded=true] .goal-menu-caret { transform: translateY(3px) rotate(-135deg); }
+/* Opens upward, because the composer is the floor of the dialog. */
+.goal-menu-pop {
+  position: absolute; z-index: 40; bottom: calc(100% + 7px); left: 0;
+  width: max-content; min-width: 224px; max-width: min(78vw, 330px);
+  max-height: min(46vh, 340px); overflow-y: auto; overscroll-behavior: contain;
+  padding: 5px; border: 1px solid var(--border); border-radius: 12px;
+  background: var(--card); box-shadow: var(--shadow-selected);
+  animation: goal-menu-in .13s ease-out;
+}
+@keyframes goal-menu-in { from { opacity: 0; transform: translateY(4px); } }
+@media (prefers-reduced-motion: reduce) {
+  .goal-menu-pop { animation: none; }
+  .goal-menu-caret { transition: none; }
+}
+.goal-menu-pop ul { margin: 0; padding: 0; list-style: none; }
+.goal-menu-group {
+  margin: 9px 0 3px; padding: 0 9px;
+  color: var(--faint); font-size: 9.5px; font-weight: 700;
+  letter-spacing: .06em; text-transform: uppercase;
+}
+.goal-menu-group:first-child { margin-top: 2px; }
+.goal-menu-dot { flex: none; width: 5px; height: 5px; border-radius: 50%; background: transparent; }
+.goal-menu-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-menu-pop > small { display: block; padding: 1px 4px 2px; color: var(--faint); font-size: 10px; line-height: 1.5; }
+.goal-menu-empty { margin: 8px 9px; color: var(--dim); font-size: 12px; line-height: 1.5; }
+
+/* Narrow: too little room to hang a popup off its own pill without running past
+   the right edge, so it spans the composer instead. Part of the widget, so both
+   composers get it. */
+@media (max-width: 760px) {
+  .goal-menu { position: static; }
+  .goal-menu-pop, .goal-menu.push .goal-menu-pop { left: 4px; right: 4px; width: auto; min-width: 0; max-width: none; }
+  .goal-menu-value { max-width: 96px; }
+}

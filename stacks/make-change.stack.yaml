@@ -1,15 +1,42 @@
 version: 2
 id: make-change
-name: Make a change
-description: Implement a focused change, run relevant checks, and independently review the result.
+name: "Make a change"
+description: "Implement a focused change, run relevant checks, and independently review the result."
 launchable: true
 blocks:
   - id: deliver
     use: flyt-blocks-delivery:verified-change
-    title: Implement and verify
+    title: "Implement and verify"
     config:
-      modelTier: standard
+      modelTier: "standard"
       maxCalls: 120
       maxMinutes: 30
       hardMaxSteps: 80
       repairPasses: 2
+  - id: fix-bug
+    use: flyt-blocks-delivery:fix-bug
+    title: "Diagnose and repair"
+    outputs:
+      - name: "status"
+        type: "string"
+      - name: "report"
+        type: "string"
+      - name: "milestones"
+        type: "list"
+  - id: research
+    use: flyt-blocks-core:research
+    title: "Research"
+  - id: task-graph
+    use: flyt-blocks-core:task-graph
+    title: "Plan & dispatch"
+    outputs:
+      - name: "tasks"
+        type: "list"
+      - name: "results"
+        type: "string"
+  - id: interrogate
+    use: flyt-blocks-inquiry:interrogate
+    title: "Interrogate"
+    outputs:
+      - name: "spec"
+        type: "string"

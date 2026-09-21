@@ -164,28 +164,25 @@
 .be-checkpoint-badge { color: #b56f08; background: color-mix(in srgb, #d97706 13%, transparent); }
 .be-checkpoint-badge.off { color: var(--faint); background: var(--chip); }
 
-.be-model-tier {
-  display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; padding: 11px;
-  border: 1px solid var(--border); border-radius: 10px; background: var(--side);
-}
-.be-model-tier-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.be-model-tier-head > div { display: flex; flex-direction: column; gap: 2px; }
-.be-model-tier-head strong { font-size: 13px; text-transform: capitalize; }
-.be-model-tier-head > small { max-width: 150px; color: var(--faint); font-size: 9px; line-height: 1.35; text-align: right; }
-.be-tier-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+/* A labelled group — the shape every compacted control in this panel uses:
+   a name, a reset where one applies, and the control itself. */
+.be-field-group { display: flex; flex-direction: column; gap: 5px; }
+.be-field-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.be-field-head > span { color: var(--tx); font-size: 11px; font-weight: 600; }
+.be-field-head .link { font-size: 10px; }
+.be-field-head .link:disabled { opacity: .4; cursor: default; }
+.be-tier-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
 .be-tier-options > button {
-  display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 7px 8px; text-align: left;
-  border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--tx); cursor: pointer;
+  min-width: 0; padding: 5px 4px; border: 0; border-radius: 5px; background: transparent;
+  color: var(--dim); font-size: 10.5px; text-align: center; cursor: pointer;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
-.be-tier-options > button:hover { border-color: var(--divider); }
-.be-tier-options > button.active { border-color: currentColor; box-shadow: inset 0 0 0 1px currentColor; }
-.be-tier-options strong { font-size: 10.5px; }
-.be-tier-options small { color: var(--faint); font-size: 8.5px; line-height: 1.25; }
+.be-tier-options > button:hover { color: var(--tx); background: var(--side); }
+.be-tier-options > button.active { color: var(--tx); background: var(--side); box-shadow: inset 0 0 0 1px currentColor; }
 .be-tier-options .tier-free.active { color: #16835d; }
 .be-tier-options .tier-economy.active { color: #4f78a8; }
 .be-tier-options .tier-standard.active { color: var(--accent); }
 .be-tier-options .tier-frontier.active { color: #8b5fb0; }
-.be-tier-inherit { align-self: flex-start; font-size: 9.5px; }
 .be-inline-output { grid-column: 3 / -1; width: 100%; border-top: 1px solid var(--border); padding-top: 7px; }
 .be-inline-output summary { cursor: pointer; color: var(--dim); font-size: 11px; }
 .be-inline-output pre { margin: 8px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap; font: 11px/1.5 var(--mono, ui-monospace, monospace); }
@@ -299,24 +296,42 @@
 .be-run-summary { padding: 14px 16px; border: 1px solid var(--border); border-radius: 9px; background: var(--card); box-shadow: inset 0 2px 0 color-mix(in srgb, var(--ok) 70%, transparent); }
 .be-builder-grid.no-palette { grid-template-columns: minmax(420px, 1fr) var(--be-inspector-width, 312px); }
 .be-run-summary p { white-space: pre-wrap; margin: 7px 0 0; font-size: 13px; line-height: 1.55; }
-.be-inspector-tabs { position: sticky; top: 0; z-index: 2; display: grid; grid-template-columns: repeat(3, 1fr); padding: 8px; background: var(--side); border-bottom: 1px solid var(--border); }
-.be-inspector-tabs button { border: 0; border-radius: 6px; padding: 6px 3px; background: transparent; color: var(--faint); text-transform: capitalize; font-size: 11px; cursor: pointer; }
+/* The inspector is a panel you open to change ONE thing, so its chrome is sized
+   to get out of the way of the first field: one identity row, one tab strip,
+   then inputs. Before this it spent ~60px on a kind label, a heading and an id
+   stacked three-high, and another ~120px on a bordered model-tier card that
+   printed the chosen tier's name twice. */
+.be-inspector { display: flex; flex-direction: column; }
+.be-inspector-head { position: sticky; top: 0; z-index: 3; display: flex; align-items: baseline; gap: 8px; padding: 10px 12px 8px; background: var(--side); }
+.be-inspector-head h2 { flex: 0 1 auto; min-width: 0; margin: 0 !important; font-size: 13px !important; font-weight: 650; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.be-inspector-head code { flex: none; margin-left: auto; color: var(--faint); font: 10px var(--mono, ui-monospace, monospace); }
+.be-inspector-tabs { position: sticky; top: 36px; z-index: 2; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 0 10px 7px; background: var(--side); border-bottom: 1px solid var(--border); }
+.be-inspector-tabs button { border: 0; border-radius: 5px; padding: 4px 3px; background: transparent; color: var(--faint); text-transform: capitalize; font-size: 10.5px; cursor: pointer; }
+.be-inspector-tabs button:hover { color: var(--dim); }
 .be-inspector-tabs button.active { color: var(--tx); background: var(--card); }
-.be-inspector-head { padding: 14px 14px 10px; }
-.be-inspector-head h2 { margin: 3px 0 !important; font-size: 15px !important; }
-.be-inspector-head code { color: var(--faint); font-size: 10px; }
-.be-config-form, .be-context, .be-history, .plugin-block-configuration { padding: 4px 14px 18px; display: flex; flex-direction: column; gap: 12px; }
-.be-config-form label, .plugin-block-configuration label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--dim); }
-.be-config-form label > span, .plugin-block-configuration label > span { color: var(--tx); font-weight: 600; }
-.be-config-form small, .plugin-block-configuration small { color: var(--faint); line-height: 1.35; }
-.be-config-form input, .be-config-form select, .be-config-form textarea, .plugin-block-configuration input, .plugin-block-configuration select { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--tx); padding: 7px 8px; resize: vertical; }
-.be-context h3 { margin: 8px 0 0; font-size: 11px; color: var(--tx); }
-.be-context p { margin: 0; color: var(--faint); font-size: 11px; }
-.be-context code { display: block; color: var(--dim); font-size: 10px; }
+.be-config-form, .be-context, .be-history, .plugin-block-configuration { padding: 10px 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.be-config-form label, .plugin-block-configuration label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--dim); }
+.be-config-form label > span, .plugin-block-configuration label > span { display: inline-flex; align-items: center; gap: 4px; color: var(--tx); font-size: 11px; font-weight: 600; }
+/* The description is a tooltip now; this is the mark that says one is there. */
+.be-field-hint { width: 12px; height: 12px; display: inline-grid; place-items: center; border: 1px solid var(--border); border-radius: 50%; color: var(--faint); font: 600 8px/1 var(--mono, ui-monospace, monospace); font-style: normal; cursor: help; }
+.be-config-form small, .plugin-block-configuration small { color: var(--faint); font-size: 10px; line-height: 1.35; }
+.be-config-form input, .be-config-form select, .be-config-form textarea, .plugin-block-configuration input, .plugin-block-configuration select { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 6px; background: var(--card); color: var(--tx); padding: 6px 8px; font-size: 11.5px; resize: vertical; }
+.be-config-form input[type="checkbox"] { width: auto; align-self: flex-start; }
+/* Pinned: the save button used to sit below however many fields the block
+   declared, so on a block with a prompt textarea you scrolled past your own
+   edit to commit it. */
+.be-config-actions { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 2px -12px -14px; padding: 8px 12px; background: var(--side); border-top: 1px solid var(--border); }
+.be-config-actions > span { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+.be-config-actions[data-dirty] > span { color: var(--accent); }
+.be-config-actions .be-primary { padding: 5px 14px; font-size: 11.5px; }
+.be-context-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding-bottom: 8px; border-bottom: 1px solid var(--divider); }
+.be-context-row > span { flex: none; min-width: 52px; color: var(--faint); font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; cursor: help; }
+.be-context-row em { color: var(--faint); font-size: 11px; font-style: normal; }
+.be-context-row code { color: var(--dim); font: 10px var(--mono, ui-monospace, monospace); }
 .be-history article { border-bottom: 1px solid var(--border); padding-bottom: 10px; font-size: 10px; }
 .be-history article div { display: flex; justify-content: space-between; gap: 8px; }
 .be-history time { color: var(--faint); }
-.be-empty-copy { color: var(--faint); font-size: 11px; line-height: 1.5; padding: 12px 14px; margin: 0; }
+.be-empty-copy { color: var(--faint); font-size: 11px; line-height: 1.5; padding: 12px; margin: 0; }
 .be-yaml { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 330px; }
 .be-yaml-editor { min-height: 0; display: grid; grid-template-columns: 48px minmax(0, 1fr); overflow: hidden; background: #111714; color: #dfe8e3; }
 .be-yaml-gutter { padding: 16px 9px; display: flex; flex-direction: column; text-align: right; color: #607068; background: #0c110f; font: 12px/1.6 var(--mono, ui-monospace, monospace); overflow: hidden; }
@@ -362,8 +377,12 @@
    the question "what does High actually do" is asked while looking at steps. */
 .be-block.overridden { border-color: color-mix(in srgb, var(--accent) 48%, var(--border)); }
 .be-mode-override { align-self: flex-start; max-width: 100%; margin-top: 2px; padding: 2px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 10px; font-weight: 600; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.be-mode-note { margin: 0 0 10px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 8px; background: var(--accent-soft); color: var(--tx); font-size: 11.5px; line-height: 1.5; }
+.be-mode-note { margin: 0; padding: 6px 8px; border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0; background: var(--accent-soft); color: var(--dim); font-size: 10.5px; line-height: 1.45; }
 .be-mode-note strong { color: var(--accent); }
 .be-activity-pages { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 0; font-size: 12px; color: var(--dim); }
 .be-activity-pages button { padding: 4px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--card); color: var(--tx); cursor: pointer; }
 .be-activity-pages button:disabled { opacity: .45; cursor: default; }
+
+/* Build's chat opens as a dialog whose shape and backdrop belong to the chat
+   itself (src/chat/chatStyles.css, `.flyt-chat-dialog`) — the same one the loop
+   designer opens. Nothing about it is Build's, so nothing about it is here. */

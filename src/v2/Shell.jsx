@@ -78,6 +78,7 @@ export function activeProjectRecord(projectTabsState) {
 export default function Shell({
   location = null, onNavigate, build = null, watching = null,
   composer = null, projectTabs = null, models = null, history = null, chats = null, onRunBuild = null,
+  activeModels = [],
   workflowInteraction = null, onWorkflowDecide = null, onWorkflowAnswer = null,
   onWorkflowReply = null, workflowReplyBusy = false, runs = [], onOpenRun = null,
   onNewChat = null, onOpenFlow = null, onOpenSettings = null,
@@ -273,6 +274,11 @@ export default function Shell({
                     saveSource={build?.saveSource ?? null}
                     onRun={onRunBuild ? () => onRunBuild(build?.stack) : null}
                     onOpenLibrary={() => setLibraryOpen(true)}
+                    // Build's chat is scoped to the open project, like every
+                    // other conversation in this app. Without a project there
+                    // is nowhere to keep a thread, and the editor offers no Ask.
+                    projectId={activeProjectId}
+                    activeModels={activeModels}
                   />
                   {libraryOpen && <div className="v2-library-overlay" role="presentation" onMouseDown={() => setLibraryOpen(false)}>
                     <aside className="v2-library-drawer" role="dialog" aria-modal="true" aria-labelledby="workflow-library-title"

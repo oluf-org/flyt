@@ -513,7 +513,7 @@ export function createEngine({
       workflowModelTiers: settings.workflowModelTiers ?? {},
       // What the Loop view's per-band pickers show. Model ids, never keys.
       loopModels: settings.loopModels ?? {},
-      // The backlog chat's model, when this person has chosen one (D45).
+      // The chat's model per channel, when this person has chosen one (D45).
       chat: settings.chat ?? {},
       workers: Object.fromEntries(
         Object.entries(runtimeConfig.workers).map(([name, w]) => [name, { provider: w.provider, model: w.model }])
@@ -605,6 +605,27 @@ export function createEngine({
   // arriving BEFORE that write — which have nowhere else to be.
   function emitChat(projectId, event) {
     if (canEmit()) emit('chat:event', { projectId, at: new Date().toISOString(), ...event });
+  }
+
+  // What a chat channel is standing in front of, when only the HOST knows.
+  //
+  // The Loop's chat grounds itself from the backlog, which core/api.js can read
+  // on its own. Build's cannot: the workflow being edited lives in the desktop
+  // host's build controller, including edits not yet saved to YAML, and a chat
+  // that read the file instead would disagree with the canvas exactly when
+  // somebody asks about what they just changed.
+  //
+  // So the host registers a provider and core/api.js asks it. One function, set
+  // once, never required — a headless caller registers nothing, and the
+  // channel's tools then say there is no workflow open, which is true there.
+  let chatContext = null;
+  function setChatContext(provider) {
+    chatContext = typeof provider === 'function' ? provider : null;
+  }
+  function chatContextFor(channel, projectId) {
+    // A host that throws while assembling context must not fail the turn: the
+    // honest degradation is a chat that says it cannot see the workflow.
+    try { return chatContext?.(channel, projectId) ?? null; } catch { return null; }
   }
 
   // Attended workflow interaction: approvals, direct block questions, and a
@@ -904,6 +925,7 @@ export function createEngine({
     // Push
     pushStateFor, broadcastActivity, pushUpdateFor, pushSnapshotFor, pushEventsFor,
     emitLoop, loopLog, loopLogFor, emitChat, emitWorkflow,
+    setChatContext, chatContextFor,
     // A project id that is gone for good (an appdata project adopted into a
     // real folder) takes its push channels with it.
     dropPushState,

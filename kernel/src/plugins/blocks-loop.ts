@@ -12,7 +12,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { JsonValue } from '../types.js';
 import type { BlockDefinition, BlockRun } from '../blocks/types.js';
-import { AI_STEP_SETTINGS, executeAiStep } from './blocks-aistep.js';
+import { AI_STEP_SETTINGS, aiStepSettings, executeAiStep } from './blocks-aistep.js';
 import { parseListOutput } from '../blocks/list-output.js';
 
 /** Cordis plugin name. */
@@ -24,21 +24,23 @@ export const inject = ['blocks', 'sessions'];
 /** Backlog-plan may read the project to confirm every path it names. */
 const PLAN_CEILING = ['read_file', 'glob', 'search_files', 'search_references'] as const;
 
-export const backlogPlanBlock: BlockDefinition = {
-  use: 'flyt-blocks-loop:backlog-plan',
-  title: 'Backlog plan',
-  description: 'Turn analysis into queued work: claimable backlog tasks a supervisor can pick up.',
-  category: 'loop',
-  settings: AI_STEP_SETTINGS as unknown as JsonValue,
-  ceiling: PLAN_CEILING,
-  outputs: [{ name: 'tasks', type: 'list' }],
-  execute: (run: BlockRun) => executeAiStep(run, [
+const BACKLOG_SYSTEM = [
     'Turn the analysis into claimable backlog tasks.',
     'Prefer three real tasks to ten plausible ones, and prefer tasks that land on their own — a queue where three tasks wait on one stops the moment that one stops.',
     'The blastRadius is the complete list of files the worker may WRITE, including new files the task must create. Inspect existing files and parent directories to ground paths, but do not omit a required new test or document just because it does not exist yet. Read-only context files are not write targets. Take gates from commands this project actually has.',
     'Every task must be claimable by someone standing here weeks from now who has not read the analysis.',
     'Return task objects with title, goal, doneWhen (string array), blastRadius (workspace paths), and optionally gates (existing shell commands), dependsOn (existing backlog ids), skills, value and effort (integers 1–5). Never invent a backlog id for a new task. No other fields.',
-  ].join('\n'), { name: 'tasks', type: 'list' }),
+  ].join('\n');
+
+export const backlogPlanBlock: BlockDefinition = {
+  use: 'flyt-blocks-loop:backlog-plan',
+  title: 'Backlog plan',
+  description: 'Turn analysis into queued work: claimable backlog tasks a supervisor can pick up.',
+  category: 'loop',
+  settings: aiStepSettings(BACKLOG_SYSTEM) as unknown as JsonValue,
+  ceiling: PLAN_CEILING,
+  outputs: [{ name: 'tasks', type: 'list' }],
+  execute: (run: BlockRun) => executeAiStep(run, BACKLOG_SYSTEM, { name: 'tasks', type: 'list' }),
 };
 
 /**

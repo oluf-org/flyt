@@ -11,7 +11,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { JsonValue } from '../types.js';
 import type { BlockDefinition, BlockOutcome, BlockRun } from '../blocks/types.js';
-import { AI_STEP_SETTINGS, executeAiStep } from './blocks-aistep.js';
+import { aiStepSettings, executeAiStep } from './blocks-aistep.js';
 import { robustEvaluationBlock, immutableArtifactBlock } from './blocks-evaluation.js';
 
 const PROMPT_REFINER_SYSTEM = [
@@ -138,16 +138,18 @@ const judge = (
   ceiling: readonly string[] = [],
 ): BlockDefinition => ({
   use, title, description, category: 'judgement',
-  settings: AI_STEP_SETTINGS as unknown as JsonValue,
+  settings: aiStepSettings(brief) as unknown as JsonValue,
   ceiling,
   outputs: [{ name: output.name, type: output.type ?? 'string' }],
   execute: (run: BlockRun) => executeAiStep(run, brief, output),
 });
 
+const EVALUATION_SYSTEM = 'Evaluate against the fixed brief and evidence. Return ONLY JSON: {"verdict":"pass"|"retry"|"escalate","success":boolean,"score":number from 0 to 1,"explanation":string}. Success must equal (verdict === "pass"). Unsupported claims are retry, never pass.';
+
 export const evaluationBlock = judge(
   'flyt-blocks-judgement:evaluation', 'Evaluation',
   'Judge work against its plan or brief: pass, retry, or escalate, with the reason.',
-  'Evaluate the work against the plan or brief it answers to. Return a verdict — pass, retry, or escalate — and say why. A pass that rests on nothing is a retry.',
+  EVALUATION_SYSTEM,
   // The verdict an `If` predicate names (the plan's `gate.result` example).
   { name: 'verdict' },
 );
@@ -170,7 +172,7 @@ evaluationBlock.outputs = [
 ];
 evaluationBlock.execute = async run => {
   const result = await executeAiStep(run,
-    'Evaluate against the fixed brief and evidence. Return ONLY JSON: {"verdict":"pass"|"retry"|"escalate","success":boolean,"score":number from 0 to 1,"explanation":string}. Success must equal (verdict === "pass"). Unsupported claims are retry, never pass.',
+    EVALUATION_SYSTEM,
     { name: 'evaluation' });
   if (result.status !== 'done') return result;
   try {

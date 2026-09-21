@@ -12,7 +12,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { JsonValue } from '../types.js';
 import type { BlockDefinition, BlockRun } from '../blocks/types.js';
-import { AI_STEP_SETTINGS, executeAiStep } from './blocks-aistep.js';
+import { aiStepSettings, executeAiStep } from './blocks-aistep.js';
 
 /** Cordis plugin name. */
 export const name = 'flyt-blocks-inquiry';
@@ -28,7 +28,7 @@ const inquire = (
   output: { name: string; type?: 'string' | 'list' },
 ): BlockDefinition => ({
   use, title, description, category: 'inquiry',
-  settings: AI_STEP_SETTINGS as unknown as JsonValue,
+  settings: aiStepSettings(brief) as unknown as JsonValue,
   ceiling: INQUIRY_CEILING,
   outputs: [{ name: output.name, type: output.type ?? 'string' }],
   execute: (run: BlockRun) => executeAiStep(run, brief, output),

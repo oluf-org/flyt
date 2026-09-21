@@ -963,8 +963,8 @@ export const TASK_GRAPH_SETTINGS = {
     modelTier: { title: 'Model tier', enum: ['free', 'economy', 'standard', 'frontier'], description: 'Stable cost/quality profile.' },
     modelFallbacks: { type: 'array', items: { type: 'string' }, maxItems: 3 },
     systemPrompt: {
-      title: 'Planner system prompt', type: 'string', format: 'multiline',
-      description: 'Append workflow-specific planning guidance after the task-graph block’s invariant safety contract.',
+      title: 'Additional planner guidance', type: 'string', format: 'multiline',
+      description: 'The built-in planner prompt is assembled from parallelism and task limits at runtime. Add workflow-specific guidance here; leave blank to use the built-in instructions.',
     },
     workerSystemPrompt: {
       title: 'Worker system prompt', type: 'string', format: 'multiline',

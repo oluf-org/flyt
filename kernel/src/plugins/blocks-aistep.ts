@@ -61,6 +61,14 @@ export const AI_STEP_SETTINGS = {
   },
 } as const;
 
+/** Expose the same standing brief used by execution without storing an override. */
+export const aiStepSettings = (brief: string) => ({
+  ...AI_STEP_SETTINGS,
+  properties: { ...AI_STEP_SETTINGS.properties,
+    systemPrompt: { ...AI_STEP_SETTINGS.properties.systemPrompt, default: brief },
+  },
+});
+
 const str = (value: JsonValue | undefined, fallback = ''): string =>
   (typeof value === 'string' && value ? value : fallback);
 

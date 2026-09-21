@@ -198,6 +198,12 @@ ceiling does not go stale the moment a seventh tool lands. A set entry may be:
   `uses:network` (the tool can reach the network at all)
 
 Shipped sets: `none`, `read-only`, `repo-write`, `repo-full`, `web`, `loop`.
+The two chat channels (D45, D87) carry literal lists rather than sets —
+`CHAT_TOOLS` and `BUILD_CHAT_TOOLS` in `core/chat.js` — on purpose: `effects:read`
+would silently admit every future read tool into a surface whose whole claim is
+that you can see everything it can do, and the argument for each member is
+specific. `tests/chat.test.js` and `tests/chatChannels.test.js` assert both
+against the REGISTRY, not the prompt.
 Unlike a built-in tool, a set is pure data — an edited set is the user's answer
 and is never overwritten.
 

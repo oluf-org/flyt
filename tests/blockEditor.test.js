@@ -299,3 +299,29 @@ test('a running or waiting activity step renders open without an unknown React p
   assert.ok(steps[1].includes('open'), 'a waiting step is open on first paint');
   assert.ok(!steps[2].includes('open'), 'a settled step stays collapsed');
 });
+
+
+test('prompt fields display the execution default or the workflow override without mutating config', async () => {
+  const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'custom' });
+  try {
+    const { GenericConfigForm } = await vite.ssrLoadModule('/src/v2/BlockEditor.jsx');
+    const { workBlock, generalAnalysisBlock } = await import('../kernel/dist/plugins/blocks-core.js');
+    const { evaluationBlock } = await import('../kernel/dist/plugins/blocks-judgement.js');
+    for (const definition of [workBlock, generalAnalysisBlock, evaluationBlock]) {
+      const prompt = definition.settings.properties.systemPrompt.default;
+      assert.ok(prompt?.length > 30);
+      for (const config of [{}, { systemPrompt: '' }, { systemPrompt: 'My custom instructions' }]) {
+        const before = JSON.stringify(config);
+        const html = renderToStaticMarkup(React.createElement(GenericConfigForm, {
+          node: { kind: 'block', id: 'example', config }, definition, onError() {},
+        }));
+        const textareas = [...html.matchAll(/<textarea[^>]*>([\s\S]*?)<\/textarea>/g)];
+        const escape = text => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&#x27;');
+        assert.ok(textareas.some(match => match[1] === escape(config.systemPrompt || prompt)));
+        assert.ok(html.includes(config.systemPrompt ? 'Custom override' : 'Using built-in prompt'));
+        assert.equal(html.includes('Use built-in prompt</button>'), Boolean(config.systemPrompt));
+        assert.equal(JSON.stringify(config), before);
+      }
+    }
+  } finally { await vite.close(); }
+});

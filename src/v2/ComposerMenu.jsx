@@ -1,7 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
+import './composerMenu.css';
 
 /**
  * A pill in the composer that opens a small popover above itself.
+ *
+ * Shared: the loop designer's change request (src/v2/ChangeRequestDialog.jsx)
+ * and the chat window (src/chat/Chat.jsx) both render it, so its shape lives in
+ * composerMenu.css beside this file rather than in either surface's stylesheet.
  *
  * A change request carries two things besides its words: what the AI may edit,
  * and which files it may read. Both used to sit above the box as native selects

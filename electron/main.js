@@ -165,6 +165,18 @@ async function v2Host() {
         catch { /* telemetry cannot affect a workflow */ }
       });
       v2BuildController = await createV2BuildController(booted, { stackRoot });
+      // Build's chat channel grounds itself on what the EDITOR is drawing, not
+      // on what is on disk — those differ for every unsaved edit, which is when
+      // people ask. Only the stack and its verification cross: the snapshot also
+      // carries the block library and the plugin list, and a chat prompt is not
+      // the place to spend those tokens.
+      engine.setChatContext?.(channel => {
+        if (channel !== 'build' || !v2BuildController) return null;
+        const snapshot = v2BuildController.snapshot();
+        return snapshot?.stack
+          ? { stack: snapshot.stack, validation: snapshot.validation ?? null }
+          : null;
+      });
       const bridge = createV2HostBridge(booted, { build: () => v2BuildController.snapshot() });
       v2BuildController.subscribe(record => {
         if (win && !win.isDestroyed()) win.webContents.send('v2:command-invoke', record);
@@ -528,13 +540,21 @@ bindIpc('task:stats', projectId => ({ projectId }));
 bindIpc('work:diff', (projectId, taskId, base = null) => ({ projectId, taskId, base }));
 bindIpc('work:verify', (projectId, taskId) => ({ projectId, taskId }));
 bindIpc('run:live', (projectId = null) => ({ projectId }));
-bindIpc('chat:threads', projectId => ({ projectId }));
-bindIpc('chat:read', (projectId, threadId) => ({ projectId, threadId }));
-bindIpc('chat:new', projectId => ({ projectId }));
-bindIpc('chat:send', (projectId, threadId, text, worker = null) => ({ projectId, threadId, text, worker }));
-bindIpc('chat:stop', (projectId, threadId) => ({ projectId, threadId }));
-bindIpc('chat:delete', (projectId, threadId) => ({ projectId, threadId }));
-bindIpc('chat:tools');
+// The channels core/chat.js will answer for. Named here too, because settings
+// validation must not accept a channel that has no store behind it.
+const CHAT_CHANNEL_IDS = ['loop', 'build'];
+
+// The chat, per channel (DECISIONS.md D45). 'loop' is the board's drawer and
+// 'build' is the editor's modal; each keeps its own threads and its own tool
+// ceiling. The argument is last and defaulted, so nothing that called these
+// before the split has to change.
+bindIpc('chat:threads', (projectId, channel = 'loop') => ({ projectId, channel }));
+bindIpc('chat:read', (projectId, threadId, channel = 'loop') => ({ projectId, threadId, channel }));
+bindIpc('chat:new', (projectId, channel = 'loop') => ({ projectId, channel }));
+bindIpc('chat:send', (projectId, threadId, text, worker = null, channel = 'loop') => ({ projectId, threadId, text, worker, channel }));
+bindIpc('chat:stop', (projectId, threadId, channel = 'loop') => ({ projectId, threadId, channel }));
+bindIpc('chat:delete', (projectId, threadId, channel = 'loop') => ({ projectId, threadId, channel }));
+bindIpc('chat:tools', (channel = 'loop') => ({ channel }));
 bindIpc('feedback:stats', projectId => ({ projectId }));
 bindIpc('feedback:digest', (projectId, enqueue = false) => ({ projectId, enqueue }));
 // The benchmark trend (§12.1) — the only number on the Loop view that answers
@@ -1008,6 +1028,31 @@ ipcMain.handle('settings:set', (_e, patch = {}) => {
     const v = patch.judgeModel.trim();
     if (v) settings.judgeModel = v; else delete settings.judgeModel;
   }
+  // The chat's model, per channel. This block did not exist, so every
+  // `setSettings({ chat: { worker } })` the chat box has ever sent was dropped
+  // here and `chatWorkerDefault` read a key nothing wrote — the model you picked
+  // survived until you restarted and then silently did not. Keyed by channel
+  // now ('loop', 'build'), with the old flat `worker` still read as the loop's
+  // so an existing settings.json keeps its choice.
+  if (patch.chat && typeof patch.chat === 'object') {
+    const chat = { ...(settings.chat ?? {}) };
+    if (patch.chat.worker !== undefined) {
+      if (patch.chat.worker?.model) chat.worker = { provider: patch.chat.worker.provider ?? 'auto', model: String(patch.chat.worker.model) };
+      else delete chat.worker;
+    }
+    if (patch.chat.workers && typeof patch.chat.workers === 'object') {
+      const workers = { ...(chat.workers ?? {}) };
+      for (const [channel, worker] of Object.entries(patch.chat.workers)) {
+        if (!CHAT_CHANNEL_IDS.includes(channel)) continue;
+        // An explicit null CLEARS it back to the loop's bands. Without a way to
+        // un-set one, picking a model here would be a one-way door.
+        if (worker?.model) workers[channel] = { provider: worker.provider ?? 'auto', model: String(worker.model) };
+        else delete workers[channel];
+      }
+      if (Object.keys(workers).length) chat.workers = workers; else delete chat.workers;
+    }
+    if (Object.keys(chat).length) settings.chat = chat; else delete settings.chat;
+  }
   persistSettings();
   rebuildRuntimeConfig();
   return publicSettings();
@@ -1162,6 +1207,7 @@ app.on('before-quit', event => {
     detachV2Plugins = null;
     v2BuildController?.dispose?.();
     v2BuildController = null;
+    engine.setChatContext?.(null);
     await v2HostPromise?.then(host => host?.booted.dispose());
   };
   // Never turn graceful shutdown into an app that cannot be closed. Calls get

@@ -37,6 +37,20 @@ export const CHAT_TOOLS = [
   'enqueue_task'                              // the one write
 ];
 
+// Build's ceiling. Same discipline, different job: it reads the workflow on the
+// screen and the code around it, and its one "write" writes nothing — a
+// proposal is applied by a person, through ctx.commands, in the renderer.
+//
+// Deliberately WITHOUT `enqueue_task`: a question about a graph is not a reason
+// to put a row on somebody's board, and a chat that quietly queued work while
+// you were editing would be the Loop's chat wearing the wrong hat.
+export const BUILD_CHAT_TOOLS = [
+  'read_stack',                               // the graph on the screen
+  'read_file', 'glob', 'search_references',   // the code, read only
+  'read_run',                                 // what this workflow did last time
+  'propose_stack_change'                      // a card, not an edit
+];
+
 const THREAD_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const MAX_TURNS_IN_CONTEXT = 20;
 
@@ -154,6 +168,115 @@ export function chatSystemPrompt({ projectName = null, tasks = [], ctx = {} }) {
 }
 
 /**
+ * What Build's chat is told about where it is standing.
+ *
+ * Grounded the same way the Loop's is, and from the SAME surface the editor
+ * draws: the workflow's real steps, its real verification errors, and the block
+ * the person has selected. "Why does this fail" is answerable from the first
+ * lines of this prompt, which is the difference between a chat beside an editor
+ * and a chat that has to go and find out what it is looking at.
+ */
+export function buildChatSystemPrompt({ projectName = null, workflow = null, selected = null }) {
+  const stack = workflow?.stack ?? null;
+  const validation = workflow?.validation ?? null;
+  const nodes = stack?.root ? outline(stack.root, 0, []) : [];
+  const errors = (validation?.errors ?? []).slice(0, 5);
+  const warnings = (validation?.warnings ?? []).slice(0, 5);
+
+  return [
+    'ROLE: workflow-chat',
+    'You are answering questions about a workflow being edited in Flyt’s Build editor,',
+    `in the project "${projectName ?? 'this project'}". A workflow is one graph of blocks and`,
+    'controls; running it spends money on models, so being accurate about what it does matters.',
+    '',
+    stack ? `THE WORKFLOW OPEN RIGHT NOW: ${stack.name ?? stack.id ?? 'untitled'}` : 'NO WORKFLOW IS OPEN.',
+    nodes.length ? nodes.join('\n') : '',
+    selected ? `\nThe person has "${selected}" selected.` : '',
+    validation ? `\nSTATIC VERIFICATION: ${validation.ok ? 'passing' : 'FAILING'}` : '',
+    errors.length ? `ERRORS:\n${errors.map(e => `- ${e.line ? `line ${e.line}: ` : ''}${e.message}`).join('\n')}` : '',
+    warnings.length ? `WARNINGS:\n${warnings.map(w => `- ${w.line ? `line ${w.line}: ` : ''}${w.message}`).join('\n')}` : '',
+    '',
+    'HOW TO WORK:',
+    '- Answer from the tools, not from memory. read_stack is the graph on the screen,',
+    '  including edits not yet saved to YAML; read_file and glob are the repository.',
+    '- Be short. This is a panel over an editor, not a report.',
+    '- WHEN THE USER ASKS FOR THE WORKFLOW TO BE CHANGED, CALL propose_stack_change.',
+    '  It changes nothing: the person sees your commands as a card and applies them.',
+    '  Never say an edit was made — you cannot make one.',
+    '- You cannot write files, run commands or run this workflow. Work is done by a run,',
+    '  in an isolated worktree, behind the project’s gates. That is deliberate.',
+    '- Every block id you name must already exist. Call read_stack before proposing anything.'
+  ].filter(Boolean).join('\n');
+}
+
+/** The graph as indented lines — cheaper to read than JSON, and in order. */
+function outline(node, depth, out) {
+  for (const child of node.children ?? []) {
+    const pad = '  '.repeat(depth + 1);
+    const what = child.kind === 'block' ? (child.use ?? 'block') : child.kind;
+    out.push(`${pad}- ${child.id} (${what})${child.title ? ` — ${child.title}` : ''}`);
+    if (child.kind !== 'block') outline(child, depth + 1, out);
+    if (child.kind === 'if' && child.else?.length) {
+      out.push(`${pad}  else:`);
+      outline({ children: child.else }, depth + 1, out);
+    }
+  }
+  return out;
+}
+
+/**
+ * The channels, as a table.
+ *
+ * A channel is: where its threads live, what it may call, what it is told, and
+ * how its turns’ proposals are read back out. Everything else about a turn is
+ * the same for all of them, which is why `runChatTurn` below takes one of these
+ * rather than branching on a name — and why a third channel is a row here
+ * rather than an edit to the turn loop.
+ *
+ * `dir` is relative to the project’s chat root. The loop keeps the root itself,
+ * because that is where its threads already are and a migration bought only
+ * symmetry; `ChatStore.threads()` lists `*.jsonl` and nothing else, so another
+ * channel’s subdirectory is invisible to it.
+ */
+export const CHAT_CHANNELS = {
+  loop: {
+    id: 'loop',
+    dir: '.',
+    tools: CHAT_TOOLS,
+    system: ({ projectName, tasks, blockerCtx }) => chatSystemPrompt({ projectName, tasks, ctx: blockerCtx }),
+    // enqueue_task in propose mode: the card the human commits with task:add.
+    proposals: calls => calls
+      .filter(c => c.tool === 'enqueue_task' && c.ok && c.result?.proposed)
+      .map(c => ({
+        id: c.result?.id ?? null,
+        title: c.result?.task?.title ?? c.args?.title ?? '',
+        goal: c.result?.task?.goal ?? c.args?.goal ?? '',
+        // The body Queue it passes to task:add verbatim: the human committing
+        // is the same call the model would have made without a witness.
+        task: c.result?.task ?? null
+      }))
+  },
+  build: {
+    id: 'build',
+    dir: 'build',
+    tools: BUILD_CHAT_TOOLS,
+    system: ({ projectName, workflow, selected }) => buildChatSystemPrompt({ projectName, workflow, selected }),
+    // propose_stack_change: the card the human commits through ctx.commands.
+    proposals: calls => calls
+      .filter(c => c.tool === 'propose_stack_change' && c.ok && c.result?.proposed)
+      .map((c, index) => ({
+        id: c.result?.id ?? `p-${index + 1}`,
+        summary: c.result?.summary ?? c.args?.summary ?? '',
+        rationale: c.result?.rationale ?? null,
+        commands: c.result?.commands ?? []
+      }))
+  }
+};
+
+/** The channel by name. An unknown one is the loop, never a new store. */
+export const chatChannel = name => CHAT_CHANNELS[name] ?? CHAT_CHANNELS.loop;
+
+/**
  * Run one turn.
  *
  * Everything expensive is injected: the caller supplies the worker, the key,
@@ -173,17 +296,23 @@ export function chatSystemPrompt({ projectName = null, tasks = [], ctx = {} }) {
  */
 export async function runChatTurn({
   store, threadId, text, worker, apiKey, projectName = null,
-  tasks = [], blockerCtx = {}, toolCtx = {}, onText = null, onEvent = null,
+  // Which conversation this is. The channel decides the toolset, the prompt and
+  // how proposals are read back out — everything else about a turn is the same,
+  // so it is the only thing that branches.
+  channel = 'loop',
+  tasks = [], blockerCtx = {}, workflow = null, selected = null,
+  toolCtx = {}, onText = null, onEvent = null,
   signal = null, timeout = null, retry = null
 }) {
   const question = String(text ?? '').trim();
   if (!question) throw new Error('An empty message has nothing to answer.');
+  const lane = chatChannel(channel);
 
   store.append(threadId, { role: 'user', text: question });
-  onEvent?.({ kind: 'user', threadId, text: question });
+  onEvent?.({ kind: 'user', channel: lane.id, threadId, text: question });
 
-  const { tools, missing } = resolveTools({ grant: CHAT_TOOLS, ceiling: CHAT_TOOLS });
-  const system = chatSystemPrompt({ projectName, tasks, ctx: blockerCtx });
+  const { tools, missing } = resolveTools({ grant: lane.tools, ceiling: lane.tools });
+  const system = lane.system({ projectName, tasks, blockerCtx, workflow, selected });
   const prompt = historyPrompt(store.read(threadId), question);
 
   let result;
@@ -200,32 +329,32 @@ export async function runChatTurn({
       // registry's run, not a copy a caller could wrap — the only door into a
       // model's call is the ctx. The loop's workers never set it: an
       // unattended agent has nobody to confirm with, so its calls stay writes.
-      ctx: { ...toolCtx, proposeTasks: true, store: logSink(toolCtx.store, threadId, onEvent) },
+      ctx: {
+        ...toolCtx, proposeTasks: true,
+        // The workflow the editor is drawing, for the channel whose tools read
+        // it. Passed on the ctx like every other bound resource, so a tool
+        // cannot reach a workflow the caller did not hand it.
+        ...(workflow ? { workflow } : {}),
+        store: logSink(toolCtx.store, threadId, onEvent, lane.id)
+      },
       onText, signal, timeout, retry,
       // What the MODEL call did — budget, finish reason, cost (D40). Distinct
       // from a tool call, and conflating the two is why this was wrong first.
-      onCall: rec => onEvent?.({ kind: 'model', threadId, model: rec.model ?? null, finishReason: rec.finishReason ?? null })
+      onCall: rec => onEvent?.({ kind: 'model', channel: lane.id, threadId, model: rec.model ?? null, finishReason: rec.finishReason ?? null })
     });
   } catch (err) {
     const message = String(err?.message ?? err);
     const turn = store.append(threadId, { role: 'assistant', text: '', error: message });
-    onEvent?.({ kind: 'error', threadId, error: message });
+    onEvent?.({ kind: 'error', channel: lane.id, threadId, error: message });
     return { ...turn, error: message };
   }
 
-  // Which tasks this turn PROPOSED. Pulled out separately because the UI
-  // renders each as a card with Queue it / Discard: the model proposes, the
-  // human commits, and that is the highest-value interaction in the phase.
-  const proposals = (result.toolCalls ?? [])
-    .filter(c => c.tool === 'enqueue_task' && c.ok && c.result?.proposed)
-    .map(c => ({
-      id: c.result?.id ?? null,
-      title: c.result?.task?.title ?? c.args?.title ?? '',
-      goal: c.result?.task?.goal ?? c.args?.goal ?? '',
-      // The body Queue it passes to task:add verbatim: the human committing is
-      // the same call the model would have made without a witness.
-      task: c.result?.task ?? null
-    }));
+  // What this turn PROPOSED. Pulled out separately because the UI renders each
+  // as a card with a commit button: the model proposes, the human commits, and
+  // that is the highest-value interaction in the phase. WHAT a proposal looks
+  // like is the channel's business — a queued task on the Loop, a list of
+  // `stack:` commands in Build — so its shape comes from the table above.
+  const proposals = lane.proposals(result.toolCalls ?? []);
 
   const turn = store.append(threadId, {
     role: 'assistant',
@@ -241,9 +370,10 @@ export async function runChatTurn({
       ...(c.error ? { error: c.error } : {})
     })),
     ...(proposals.length ? { proposals } : {}),
+    channel: lane.id,
     ...(missing?.length ? { missingTools: missing } : {})
   });
-  onEvent?.({ kind: 'assistant', threadId, text: turn.text, proposals });
+  onEvent?.({ kind: 'assistant', channel: lane.id, threadId, text: turn.text, proposals });
   return turn;
 }
 
@@ -272,13 +402,13 @@ export function historyPrompt(turns, question) {
  * one was supplied, and is a no-op when one was not — a chat must never fail
  * because a tool tried to write a run file that does not exist.
  */
-function logSink(store, threadId, onEvent) {
+function logSink(store, threadId, onEvent, channel = 'loop') {
   return {
     ...(store ?? {}),
     appendLog(runId, entry) {
       if (entry?.event === 'tool_call') {
         onEvent?.({
-          kind: 'tool', threadId, tool: entry.tool, ok: entry.ok,
+          kind: 'tool', channel, threadId, tool: entry.tool, ok: entry.ok,
           ms: entry.ms, args: entry.args, ...(entry.error ? { error: entry.error } : {})
         });
       }

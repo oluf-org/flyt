@@ -529,6 +529,7 @@ export default function DailyRoot() {
     <ModelMetaProvider value={{ ...(settings ?? {}), catalog: models }}>
       <Shell
         onBuildVisibilityChange={setBuildHistoryVisible}
+        activeModels={settings?.activeModels ?? []}
         projects={projects}
         location={location}
         onNavigate={setLocation}

@@ -590,7 +590,6 @@ export default function LoopPage({ projectId, activeModels = [], onOpenRun = nul
           <LoopChat
             projectId={projectId}
             activeModels={activeModels}
-            boardBlockers={boardLevel}
             onOpenTask={id => { setOpenId(id); setCursor({ column: null, id }); }}
           />
         )}

@@ -1,0 +1,87 @@
+{
+  "id": "propose_stack_change",
+  "title": "Propose a change to the open workflow",
+  "description": "Propose an edit to the workflow open in Build. Give a one-line summary and the exact commands that would make it: stack:insert-block, stack:remove-block, stack:move-block, stack:wrap-block, stack:unwrap-container, stack:configure-block, stack:configure-container — each with the same arguments the editor uses. NOTHING IS CHANGED by calling this: the proposal is shown to the person as a card, and only they can apply it. Call read_stack first so every node id you name actually exists.",
+  "provider": "builtin",
+  "enabled": true,
+  "effects": [
+    "read"
+  ],
+  "scope": "workspace",
+  "risk": "safe",
+  "autoExecute": true,
+  "source": {
+    "kind": "builtin",
+    "importedFrom": null,
+    "importedAt": null
+  },
+  "trust": "trusted",
+  "parameters": {
+    "type": "object",
+    "required": [
+      "summary",
+      "commands"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "summary": {
+        "type": "string",
+        "description": "One line, in the person's terms: \"Add an evaluation step after `draft`.\" Not a restatement of the command names."
+      },
+      "commands": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 12,
+        "description": "The edits, in the order they must be applied.",
+        "items": {
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string",
+              "enum": [
+                "stack:insert-block",
+                "stack:remove-block",
+                "stack:move-block",
+                "stack:wrap-block",
+                "stack:unwrap-container",
+                "stack:configure-block",
+                "stack:configure-container"
+              ]
+            },
+            "args": {
+              "type": "object",
+              "description": "The command's arguments, e.g. { \"nodeId\": \"draft\", \"config\": { \"modelTier\": \"economy\" } }."
+            }
+          }
+        }
+      },
+      "rationale": {
+        "type": "string",
+        "description": "Why, if it is not obvious from the summary. One or two sentences."
+      }
+    }
+  },
+  "keywords": [
+    "workflow",
+    "edit",
+    "change",
+    "propose",
+    "block",
+    "add",
+    "remove",
+    "configure"
+  ],
+  "examples": [
+    "add a review step after the writer block",
+    "run these two blocks in parallel instead of one after the other"
+  ],
+  "result": {
+    "preview": "json",
+    "maxPreviewChars": 2000,
+    "artifact": true
+  }
+}

@@ -6,6 +6,7 @@ import { BlockConfigurationView } from './PluginContributionView.jsx';
 import { WORKFLOW_MODEL_TIERS } from '../modelTiers.js';
 import { defaultModeId, workflowModes } from './workflowUx.js';
 import { generatedChildren, generatedTaskWaves, workflowNodes } from './workflowTree.js';
+import BuildChat from './BuildChat.jsx';
 import './blockEditorStyles.css';
 
 const TOUCH_MS = 600;
@@ -24,6 +25,7 @@ function Icon({ name, size = 16 }) {
     code: <><path d="m9 7-5 5 5 5M15 7l5 5-5 5"/></>,
     blocks: <><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/><path d="M14 7h3v3M10 17H7v-3"/></>,
     input: <><path d="M4 12h12M12 8l4 4-4 4"/><path d="M20 5v14"/></>,
+    chat: <path d="M20 15a2 2 0 0 1-2 2H8l-4 3V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z"/>,
   };
   return <svg className="be-icon" width={size} height={size} viewBox="0 0 24 24" fill="none"
     stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -291,7 +293,7 @@ function ContainerFields({ node, draft, update, jsonField }) {
   return <label><span>Predicate (JSON)</span>{jsonField('predicate', {}, 6, 'Predicate (JSON)')}</label>;
 }
 
-function GenericConfigForm({ node, definition, commands, onError }) {
+export function GenericConfigForm({ node, definition, commands, onError }) {
   const initial = node.kind === 'block' ? node.config ?? {} : containerConfig(node);
   const [draft, setDraft] = useState(initial);
   const [jsonDrafts, setJsonDrafts] = useState({});
@@ -326,20 +328,39 @@ function GenericConfigForm({ node, definition, commands, onError }) {
       onError('');
     } catch (error) { onError(String(error?.message ?? error)); }
   };
+  const dirty = JSON.stringify(draft) !== JSON.stringify(initial) || Object.keys(jsonDrafts).length > 0;
+  // A field's description is the same sentence every time this panel opens, and
+  // three of them stacked is a form you scroll instead of read. It rides on the
+  // label as a tooltip now — still there when it is wanted, gone when it is not.
   return <div className="be-config-form">
-    {node.kind === 'block' && !Object.keys(props).length && <p className="be-empty-copy">This block has no settings.</p>}
+    {node.kind === 'block' && !Object.keys(props).length && <p className="be-empty-copy">No settings.</p>}
     {Object.entries(props).filter(([name]) => !['model', 'modelTier', 'modelFallbacks'].includes(name)).map(([name, field]) => <label key={name}>
-      <span>{field.title ?? name}</span>{field.description && <small>{field.description}</small>}
+      <span title={field.description || undefined}>{field.title ?? (name === 'systemPrompt' ? 'System prompt' : name)}
+        {field.description && <i className="be-field-hint" aria-hidden="true">?</i>}</span>
+      {name === 'systemPrompt' && <small>{field.default
+        ? (draft[name] ? 'Custom override' : 'Using built-in prompt. Edit to override it for this workflow.')
+        : 'No custom guidance saved means the block uses its built-in behavior.'}</small>}
       {field.enum ? <select value={draft[name] ?? ''} onChange={event => update(name, field, event.target.value)}>
         <option value="">Default</option>{field.enum.map(option => <option key={option} value={option}>{option}</option>)}</select>
         : field.type === 'boolean' ? <input type="checkbox" checked={Boolean(draft[name] ?? field.default)} onChange={event => update(name, field, event.target.checked)} />
           : (field.type === 'array' || field.type === 'object') ? jsonField(name, field.type === 'array' ? [] : {})
-          : (name === 'instructions' || field.format === 'multiline') ? <textarea rows="7" value={draft[name] ?? ''} onChange={event => update(name, field, event.target.value)} />
+          : (name === 'instructions' || field.format === 'multiline') ? <>
+            <textarea rows="7" value={name === 'systemPrompt' ? draft[name] || field.default || '' : draft[name] ?? ''}
+              onChange={event => update(name, field, event.target.value)} />
+            {name === 'systemPrompt' && field.default && draft[name] && <button type="button"
+              onClick={() => update(name, field, undefined)}>Use built-in prompt</button>}
+          </>
             : <input type={field.type === 'number' || field.type === 'integer' ? 'number' : 'text'} value={draft[name] ?? ''}
                 min={field.minimum} max={field.maximum} onChange={event => update(name, field, event.target.value)} />}
     </label>)}
     {node.kind !== 'block' && <ContainerFields node={node} draft={draft} update={update} jsonField={jsonField} />}
-    <button type="button" className="be-primary" disabled={!commands?.invoke} onClick={save}>Save configuration</button>
+    {/* Pinned, because the save button used to be below however many fields the
+        block happened to declare: on a block with a prompt textarea you had to
+        scroll past your own edit to commit it. */}
+    <div className="be-config-actions" data-dirty={dirty || undefined}>
+      <span>{dirty ? 'Unsaved' : 'Saved'}</span>
+      <button type="button" className="be-primary" disabled={!commands?.invoke || !dirty} onClick={save}>Save</button>
+    </div>
   </div>;
 }
 
@@ -357,17 +378,22 @@ function ModelTierControl({ node, definition, commands, onError }) {
     try { await commands?.invoke?.('stack:configure-block', { nodeId: node.id, config }, 'human'); }
     catch (error) { onError(String(error?.message ?? error)); }
   };
-  return <section className="be-model-tier" aria-label="Model tier">
-    <div className="be-model-tier-head"><div><span className="section-label">Model tier</span><strong>{selected ? WORKFLOW_MODEL_TIERS.find(tier => tier.id === selected)?.name : 'Workflow default'}</strong></div>
-      <small>Choose by job; change the actual model globally later.</small></div>
-    <div className="be-tier-options" role="group" aria-label={`${node.id} model tier`}>
-      {WORKFLOW_MODEL_TIERS.map(tier => <button type="button" key={tier.id}
-        className={`tier-${tier.id}${selected === tier.id ? ' active' : ''}`}
-        aria-pressed={selected === tier.id} onClick={() => choose(tier.id)}>
-        <strong>{tier.name}</strong><small>{tier.hint}</small>
-      </button>)}
+  // Four buttons and a label. The tier NAME was printed twice — once as a
+  // heading and once on the button that was already lit — and each option
+  // carried a sentence of advice that is the same every time you open the
+  // panel. The advice is a tooltip now; the buttons say which is chosen by
+  // being the one that is on.
+  return <section className="be-field-group" aria-label="Model tier">
+    <div className="be-field-head">
+      <span>Model tier</span>
+      <button type="button" className="link" disabled={!selected} onClick={() => choose(null)}
+        title="Fall back to the model tier this workflow runs by default">Reset</button>
     </div>
-    <button type="button" className="link be-tier-inherit" disabled={!selected} onClick={() => choose(null)}>Use workflow default</button>
+    <div className="be-tier-options" role="group" aria-label={`${node.id} model tier`}>
+      {WORKFLOW_MODEL_TIERS.map(tier => <button type="button" key={tier.id} title={tier.hint}
+        className={`tier-${tier.id}${selected === tier.id ? ' active' : ''}`}
+        aria-pressed={selected === tier.id} onClick={() => choose(tier.id)}>{tier.name}</button>)}
+    </div>
   </section>;
 }
 
@@ -379,28 +405,44 @@ function Inspector({ root, selected, blocks, commands, history, uiExtensions, pr
   const definition = definitionOf(node, blocks);
   const contributions = uiExtensions.filter(row => row?.contribution?.point === 'block-configuration'
     && node?.kind === 'block' && row.contribution.block === node.use);
+  // Nothing selected is one line, not a tab strip over an empty panel: three
+  // tabs that all say "select something" is three times the chrome for none of
+  // the answer.
+  if (!node) return <aside className="be-inspector" aria-label="Workflow inspector">
+    <p className="be-empty-copy">Select a block to configure it.</p>
+  </aside>;
+  // The identity is ONE row. It used to be three — a kind label, a heading and
+  // an id, stacked — which cost about sixty pixels above the first field the
+  // person opened the panel to reach. The kind is legible from the canvas and
+  // the block's `use` is a tooltip on the id.
   return <aside className="be-inspector" aria-label="Workflow inspector">
+    <header className="be-inspector-head">
+      <h2 title={titleOf(node, blocks)}>{titleOf(node, blocks)}</h2>
+      <code title={node.kind === 'block' ? node.use ?? node.kind : node.kind}>{node.id}</code>
+    </header>
     <div className="be-inspector-tabs" role="tablist">{['config', 'context', 'history'].map(name => <button type="button" role="tab"
       aria-selected={tab === name} className={tab === name ? 'active' : ''} onClick={() => setTab(name)} key={name}>{name}</button>)}</div>
-    {!node ? <p className="be-empty-copy">Select a block or control to inspect it.</p> : <>
-      <header className="be-inspector-head"><span className="section-label">{node.kind}</span><h2>{titleOf(node, blocks)}</h2><code>{node.id}</code></header>
-      {tab === 'config' && <>
-        {preview?.overrides?.[node.id] && <p className="be-mode-note">
-          <strong>{preview.name}</strong> runs this block with {overrideLine(preview.overrides[node.id])}.
-          The fields below are the authored settings every mode starts from; edit modes in YAML.
-        </p>}
-        <ModelTierControl node={node} definition={definition} commands={commands} onError={onError} />
-        <GenericConfigForm node={node} definition={definition} commands={commands} onError={onError} />
-        {contributions.map(row => <BlockConfigurationView key={`${row.pluginId}:${row.contribution.id}`} contribution={row.contribution} pluginId={row.pluginId}
-          value={node.config ?? {}} onChange={config => commands?.invoke?.('stack:configure-block', { nodeId: node.id, config }, 'human')?.catch?.(error => onError(String(error)))} />)}</>}
-      {tab === 'context' && <div className="be-context"><h3>Receives context from</h3>{context.upstream.length
-        ? context.upstream.map(id => <code key={id}>{id}</code>) : <p>Input only</p>}<h3>Feeds</h3>{context.downstream.length
-          ? context.downstream.map(id => <code key={id}>{id}</code>) : <p>Final block</p>}{node.kind === 'block' && <><h3>Declared outputs</h3>
-          {(node.outputs ?? []).length ? node.outputs.map(output => <code key={output.name}>{node.id}.{output.name} · {output.type}</code>) : <p>No structured outputs authored.</p>}</>}</div>}
-      {tab === 'history' && <div className="be-history">{records.length ? records.map((row, index) => <article key={`${row.at}:${index}`}>
-        <div><strong>{row.command}</strong><span>{row.caller}</span></div><time>{row.at}</time>{row.details && <small>{row.details}</small>}{row.error && <p>{row.error}</p>}</article>)
-        : <p className="be-empty-copy">No authoring or prior-run history for this block yet.</p>}</div>}
-    </>}
+    {tab === 'config' && <>
+      {preview?.overrides?.[node.id] && <p className="be-mode-note">
+        <strong>{preview.name}</strong> runs this with {overrideLine(preview.overrides[node.id])}. Fields below are the authored settings.
+      </p>}
+      <ModelTierControl node={node} definition={definition} commands={commands} onError={onError} />
+      <GenericConfigForm node={node} definition={definition} commands={commands} onError={onError} />
+      {contributions.map(row => <BlockConfigurationView key={`${row.pluginId}:${row.contribution.id}`} contribution={row.contribution} pluginId={row.pluginId}
+        value={node.config ?? {}} onChange={config => commands?.invoke?.('stack:configure-block', { nodeId: node.id, config }, 'human')?.catch?.(error => onError(String(error)))} />)}</>}
+    {/* Two headings and three sentences became three labelled rows. The panel
+        is ~312px wide; "Receives context from" spent most of one. */}
+    {tab === 'context' && <div className="be-context">
+      <div className="be-context-row"><span title="Blocks whose output reaches this one">From</span>
+        {context.upstream.length ? context.upstream.map(id => <code key={id}>{id}</code>) : <em>Input only</em>}</div>
+      <div className="be-context-row"><span title="Blocks this one's output reaches">Feeds</span>
+        {context.downstream.length ? context.downstream.map(id => <code key={id}>{id}</code>) : <em>Final block</em>}</div>
+      {node.kind === 'block' && <div className="be-context-row"><span title="Structured outputs this block declares in YAML">Outputs</span>
+        {(node.outputs ?? []).length ? node.outputs.map(output => <code key={output.name}>{output.name} · {output.type}</code>) : <em>None authored</em>}</div>}
+    </div>}
+    {tab === 'history' && <div className="be-history">{records.length ? records.map((row, index) => <article key={`${row.at}:${index}`}>
+      <div><strong>{row.command}</strong><span>{row.caller}</span></div><time>{row.at}</time>{row.details && <small>{row.details}</small>}{row.error && <p>{row.error}</p>}</article>)
+      : <p className="be-empty-copy">Nothing has edited this block yet.</p>}</div>}
   </aside>;
 }
 
@@ -759,7 +801,7 @@ function YamlEditor({ source, validation, validateSource, saveSource }) {
 export default function BlockEditor({
   stack, blocks = null, commands = null, uiExtensions = [], source = '', validation = null, history = [],
   validateSource = null, saveSource = null, mode = 'build', run = null, onRun = null, onOpenLibrary = null,
-  onBack = null,
+  onBack = null, projectId = null, activeModels = [],
 }) {
   const [selected, setSelected] = useState(() => stack?.root?.children?.[0]?.id ?? null);
   const [touched, setTouched] = useState(null);
@@ -770,6 +812,10 @@ export default function BlockEditor({
   const [inspectorWidth, setInspectorWidth] = useState(SIDEBAR_LIMITS.inspector.initial);
   const [view, setView] = useState('blocks');
   const [deleting, setDeleting] = useState(null);
+  // Build's chat, over the canvas. Ctrl/Cmd+K because it is the one thing here
+  // you reach for mid-thought, and a trip to the toolbar is enough friction to
+  // make people not ask at all.
+  const [asking, setAsking] = useState(false);
   // Which mode the canvas is being read AS. Null is the authored settings,
   // which is what an edit writes; a mode id overlays what that mode changes.
   const [previewing, setPreviewing] = useState(null);
@@ -779,6 +825,14 @@ export default function BlockEditor({
     if (nodeId) setTouched({ nodeId, caller: record.caller ?? 'human' });
   }), [commands]);
   useEffect(() => { if (!touched) return; const timer = setTimeout(() => setTouched(null), TOUCH_MS); return () => clearTimeout(timer); }, [touched]);
+  useEffect(() => {
+    if (mode !== 'build' || !projectId) return undefined;
+    const onKey = event => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); setAsking(open => !open); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mode, projectId]);
   useEffect(() => {
     if (!stack?.root) { if (selected) setSelected(null); return; }
     if (!selected || !nodeById(stack.root, selected)) setSelected(stack.root.children?.[0]?.id ?? null);
@@ -806,6 +860,8 @@ export default function BlockEditor({
       <div className="be-view-switch"><button className={view === 'blocks' ? 'active' : ''} onClick={() => setView('blocks')}><Icon name="blocks"/>Build</button>
         <button className={view === 'yaml' ? 'active' : ''} onClick={() => setView('yaml')}><Icon name="code"/>YAML</button></div>
       <span className={`be-validity ${validation?.ok ? 'ok' : 'error'}`}>{validation?.ok ? `${validation.warnings?.length ?? 0} warnings` : `${validation?.errors?.length ?? 0} errors`}</span>
+      {projectId && <button type="button" className="be-secondary" onClick={() => setAsking(true)}
+        title="Ask about this workflow (Ctrl/Cmd+K)"><Icon name="chat"/>Ask</button>}
       {onOpenLibrary && <button type="button" className="be-secondary" onClick={onOpenLibrary}>Library</button>}
       {onRun && <button type="button" className="be-primary" disabled={!validation?.ok} onClick={onRun}><Icon name="play"/>Run</button>}</header>}
     {mode === 'build' && view === 'blocks' && modes.length > 0 && <ModesBar modes={modes} previewing={previewing}
@@ -826,6 +882,8 @@ export default function BlockEditor({
       </div></main>{mode === 'build' && <>{editable && <ResizeHandle side="inspector" value={inspectorWidth} onChange={setInspectorWidth} />}
         <Inspector root={stack.root} selected={selected} blocks={blocks} commands={commands} history={history}
           uiExtensions={uiExtensions} preview={previewedMode} onError={setRefusal} /></>}</div>}
+    {asking && mode === 'build' && <BuildChat projectId={projectId} stack={stack}
+      activeModels={activeModels} commands={commands} onClose={() => setAsking(false)} />}
     {deleting && <div className="be-modal-backdrop" role="presentation"><section className="be-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
       <h2 id="delete-title">Remove {controlLabel(deleting)}?</h2><p>This control contains authored blocks. Choose what happens to them.</p><div>
         <button className="be-danger" onClick={() => settleDelete('subtree')}>Delete the whole subtree</button><button className="be-secondary" onClick={() => settleDelete('unwrap')}>Keep blocks, remove control</button><button onClick={() => settleDelete('cancel')}>Cancel</button></div>

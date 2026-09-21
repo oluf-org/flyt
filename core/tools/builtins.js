@@ -34,11 +34,17 @@ import webSearch from './web_search.js';
 import scrapePage from './scrape_page.js';
 import extractPage from './extract_page.js';
 import askHuman from './ask_human.js';
+// Build's chat (the 'build' channel in core/chat.js): read the workflow that is
+// open, and propose an edit to it. The second one writes nothing — a person
+// applies it through ctx.commands, the one edit path.
+import readStack from './read_stack.js';
+import proposeStackChange from './propose_stack_change.js';
 
 export const BUILTIN_MODULES = [
   readFile, glob, searchFiles, createFile, writeFile, editFile, bash, createTask, enqueueTask, queueBacklogTasks,
   searchReferences, writeTaskMd, readToolResult,
-  runGate, listTasks, readTask, whyBlocked, updateTask, readRun, webFetch, webSearch, scrapePage, extractPage, askHuman
+  runGate, listTasks, readTask, whyBlocked, updateTask, readRun, webFetch, webSearch, scrapePage, extractPage, askHuman,
+  readStack, proposeStackChange
 ];
 
 export const builtinModule = id => BUILTIN_MODULES.find(t => t.name === id) ?? null;
